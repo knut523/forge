@@ -21,6 +21,17 @@ from pathlib import Path
 # here before they are implemented on purpose: the view renders the whole road
 # and greys out what does not exist yet, so nobody mistakes a short run for a
 # complete one.
+# A feature is not a bigger change; it is several small ones with an order.
+# Epics get their own phase set, and each item becomes an ordinary run with its
+# own build, its own review and its own pull request.
+EPIC_PHASES = [
+    ("frame",     "Frame",     "Read every repo the feature could touch"),
+    ("decompose", "Decompose", "Split it into the smallest independently shippable PRs"),
+    ("assess",    "Assess",    "Check each piece is minimal, non-overlapping and revertible"),
+    ("approve",   "Approve",   "You approve the SPLIT — once, before any code is written"),
+    ("execute",   "Execute",   "Each piece runs on its own and is reviewed on its own"),
+]
+
 PHASES = [
     ("capture", "Capture",  "Read the codebase: structure, hotspots, entry points"),
     ("impact",  "Impact",   "Wayfinder — what else does this touch, across every repo"),
@@ -75,6 +86,25 @@ CREATE TABLE IF NOT EXISTS events (
     level   TEXT DEFAULT 'info'
 );
 CREATE INDEX IF NOT EXISTS ix_events_run ON events(run_id, seq);
+
+-- One row per planned pull request. Written by Decompose, checked by Assess,
+-- approved as a set, then executed one at a time as ordinary child runs.
+CREATE TABLE IF NOT EXISTS items (
+    id         TEXT PRIMARY KEY,
+    epic_id    TEXT NOT NULL,
+    seq        INTEGER NOT NULL,
+    title      TEXT NOT NULL,
+    repo       TEXT NOT NULL,
+    rationale  TEXT,
+    files      TEXT,
+    acceptance TEXT,
+    depends_on TEXT,
+    risk       TEXT,
+    status     TEXT NOT NULL DEFAULT 'pending',
+    run_id     TEXT,
+    assessment TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_items_epic ON items(epic_id, seq);
 """
 
 
@@ -96,9 +126,53 @@ class RunStore:
     def _migrate(self) -> None:
         """Add columns introduced after the first runs were recorded."""
         have = {r["name"] for r in self.db.execute("PRAGMA table_info(runs)")}
-        for col in ("stopped_reason", "next_action", "state", "pr_url"):
+        for col in ("stopped_reason", "next_action", "state", "pr_url",
+                    "kind", "parent_id"):
             if col not in have:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        self.db.execute("UPDATE runs SET kind='run' WHERE kind IS NULL")
+        self.db.commit()
+
+    # ─── items (an epic's planned pull requests) ────────────────────────────
+
+    def add_item(self, epic_id: str, seq: int, it: dict) -> str:
+        iid = f"{epic_id}-{seq:02d}"
+        self.db.execute(
+            "INSERT OR REPLACE INTO items (id, epic_id, seq, title, repo,"
+            " rationale, files, acceptance, depends_on, risk, status)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT status FROM items"
+            "   WHERE id=?),'pending'))",
+            (iid, epic_id, seq, it.get("title", "")[:200], it.get("repo", ""),
+             it.get("rationale", "")[:1000],
+             json.dumps(it.get("files") or []),
+             json.dumps(it.get("acceptance") or []),
+             json.dumps(it.get("depends_on") or []),
+             it.get("risk", "unknown"), iid))
+        self.db.commit()
+        return iid
+
+    def items(self, epic_id: str) -> list[dict]:
+        out = []
+        for r in self.db.execute(
+                "SELECT * FROM items WHERE epic_id=? ORDER BY seq", (epic_id,)):
+            d = dict(r)
+            for k in ("files", "acceptance", "depends_on"):
+                d[k] = json.loads(d[k]) if d[k] else []
+            d["assessment"] = json.loads(d["assessment"]) if d["assessment"] else None
+            out.append(d)
+        return out
+
+    def set_item(self, item_id: str, **fields) -> None:
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        vals = [json.dumps(v) if isinstance(v, (dict, list)) else v
+                for v in fields.values()]
+        self.db.execute(f"UPDATE items SET {cols} WHERE id=?", [*vals, item_id])
+        self.db.commit()
+
+    def clear_items(self, epic_id: str) -> None:
+        self.db.execute("DELETE FROM items WHERE epic_id=?", (epic_id,))
         self.db.commit()
 
     # `state` carries what a later approval needs (the workspace, the diff, the
@@ -125,14 +199,20 @@ class RunStore:
     # ─── writes ─────────────────────────────────────────────────────────────
 
     def create(self, repo: str, goal: str, target: str | None,
-               model: str | None) -> str:
+               model: str | None, kind: str = "run",
+               parent_id: str | None = None) -> str:
         rid = uuid.uuid4().hex[:12]
         self.db.execute(
             "INSERT INTO runs (id, repo, goal, target, status, phase, model,"
-            " created_at, updated_at) VALUES (?,?,?,?,'queued',NULL,?,?,?)",
-            (rid, repo, goal, target, model, _now(), _now()))
+            " kind, parent_id, created_at, updated_at)"
+            " VALUES (?,?,?,?,'queued',NULL,?,?,?,?,?)",
+            (rid, repo, goal, target, model, kind, parent_id, _now(), _now()))
         self.db.commit()
         return rid
+
+    def children(self, epic_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM runs WHERE parent_id=? ORDER BY created_at", (epic_id,))]
 
     def emit(self, run_id: str, phase: str, kind: str, title: str,
              detail=None, level: str = "info") -> None:

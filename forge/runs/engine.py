@@ -559,9 +559,13 @@ def ship_it(run_id: str) -> None:
                   reason=f"PR #{pr['number']} opened against {pr['base']}, ready "
                          f"for review.",
                   next_action=pr["url"])
+        parent = run.get("parent_id")
     finally:
         cfg.close()
         rs.close()
+    if parent:                    # an item of a feature — let the epic advance
+        from . import epic
+        epic.on_child_finished(run_id, os.environ.get("FORGE_DB", "/data/forge.db"))
 
 
 def approve(run_id: str) -> None:

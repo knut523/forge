@@ -425,7 +425,8 @@ const GLYPH = {step:['▸','var(--accent)'], metric:['▦','var(--ink2)'], findi
   impact:['⚡','var(--med)'], warn:['▲','var(--med)'], error:['✕','#f85149'],
   plan:['▤','var(--accent)'], done:['✓','var(--hi)'], info:['·','var(--ink3)'],
   diff:['±','var(--accent)'], file:['▸','var(--ink2)']};
-let PHASES = [], CUR = null, POLL = null, SEEN = 0, EVENTS = [], FILTER = 'all';
+let PHASES = [], EPHASES = [], CUR = null, POLL = null, SEEN = 0, EVENTS = [],
+    FILTER = 'all', ITEMS = null;
 
 function flat(v){
   if(v==null) return '';
@@ -475,11 +476,30 @@ function body(d){
 function coderShell(){
   $('#coder').innerHTML = `
     <div class="card" style="margin-bottom:16px">
-      <div class="row" style="margin:0">
-        <select id="crepo" style="min-width:150px">${REPOS.map(r=>`<option>${esc(r.name)}</option>`).join('')}</select>
-        <input id="cgoal" placeholder="what should the coder build or change?" style="flex:2">
-        <input id="ctarget" placeholder="symbol or file to focus on (optional)" style="flex:1;min-width:180px">
-        <button class="go" id="cgo">Start run</button>
+      <div class="subnav" style="margin-bottom:12px">
+        <button data-mode="one" class="on">One change</button>
+        <button data-mode="feature">Feature</button>
+      </div>
+      <div id="mode-one">
+        <div class="row" style="margin:0">
+          <select id="crepo" style="min-width:150px">${REPOS.map(r=>`<option>${esc(r.name)}</option>`).join('')}</select>
+          <input id="cgoal" placeholder="what should the coder build or change?" style="flex:2">
+          <input id="ctarget" placeholder="symbol or file to focus on (optional)" style="flex:1;min-width:180px">
+          <button class="go" id="cgo">Start run</button>
+        </div>
+      </div>
+      <div id="mode-feature" hidden>
+        <div class="row" style="margin:0">
+          <input id="fgoal" placeholder="describe the whole feature — it gets split into minimal PRs" style="flex:2">
+          <button class="go" id="fgo">Plan the split</button>
+        </div>
+        <div class="hint" style="margin:11px 0 0">Repos it may touch:
+          ${REPOS.map(r=>`<label style="margin-right:12px;white-space:nowrap">
+            <input type="checkbox" class="frepo" value="${esc(r.name)}" style="flex:none;width:auto">
+            ${esc(r.name)}</label>`).join('')}
+          <div style="margin-top:8px">You approve the <b>split</b> before any code is
+          written; each piece is then built and reviewed on its own.</div>
+        </div>
       </div>
     </div>
     <div class="split">
@@ -488,6 +508,53 @@ function coderShell(){
     </div>`;
   $('#cgo').onclick = startRun;
   $('#cgoal').onkeydown = e=>{ if(e.key==='Enter') startRun(); };
+  $('#coder').querySelectorAll('.subnav button').forEach(b=>b.onclick=()=>{
+    $('#coder').querySelectorAll('.subnav button')
+      .forEach(x=>x.classList.toggle('on',x===b));
+    $('#mode-one').hidden     = b.dataset.mode !== 'one';
+    $('#mode-feature').hidden = b.dataset.mode !== 'feature';
+  });
+  $('#fgo').onclick = startEpic;
+  $('#fgoal').onkeydown = e=>{ if(e.key==='Enter') startEpic(); };
+}
+
+async function startEpic(){
+  const goal = $('#fgoal').value.trim();
+  const repos = [...document.querySelectorAll('.frepo:checked')].map(c=>c.value);
+  if(!goal) return;
+  if(!repos.length){ alert('pick at least one repo the feature may touch'); return; }
+  const btn = $('#fgo'); btn.disabled = true; btn.textContent = 'framing…';
+  try{
+    const r = await send('POST','/epics',{goal, repos});
+    $('#fgoal').value='';
+    await loadRuns(); openRun(r.id);
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled=false; btn.textContent='Plan the split'; }
+}
+
+function itemsPanel(items){
+  if(!items?.length) return '';
+  const rows = items.map(it=>{
+    const a = it.assessment || {};
+    const v = a.verdict || {};
+    const probs = a.problems || [];
+    const bad = probs.length || (v.verdict && v.verdict !== 'ok');
+    return `<div class="mem">
+        <span class="mk ${bad?'mk-lesson':'mk-convention'}">${it.seq + 1}</span>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:13px">${esc(it.title)}</div>
+          <div class="mb"><code>${esc(it.repo)}</code>
+            ${it.files.length?' · '+esc(it.files.join(', ')):' · no files named'}
+            ${it.depends_on.length?' · after #'+it.depends_on.map(d=>d+1).join(', #'):''}</div>
+          ${v.verdict && v.verdict!=='ok'
+            ? `<div class="mb" style="color:var(--med)">reviewer says ${esc(v.verdict)}: ${esc(v.why||'')}</div>`:''}
+          ${probs.map(p=>`<div class="mb" style="color:var(--med)">${esc(p.why)}${p.path?' — '+esc(p.path):''}</div>`).join('')}
+        </div>
+        <div class="mx"><span class="badge b-${it.status==='complete'?'high':it.status==='running'?'medium':'low'}">${esc(it.status)}</span></div>
+      </div>`;
+  }).join('');
+  return `<div class="sec">The split — ${items.length} minimal pull request(s)</div>
+          <div class="list" style="margin-bottom:14px">${rows}</div>`;
 }
 
 async function startRun(){
@@ -504,7 +571,10 @@ async function startRun(){
 
 async function loadRuns(){
   if(!$('#runlist')) coderShell();
-  if(!PHASES.length) PHASES = await get('/phases').catch(()=>[]);
+  if(!PHASES.length){
+    PHASES  = await get('/phases').catch(()=>[]);
+    EPHASES = await get('/phases',{kind:'epic'}).catch(()=>[]);
+  }
   const list = $('#runlist');
   try{
     const runs = await get('/runs',{limit:60});
@@ -547,18 +617,23 @@ async function refreshRun(full){
     [run, evs] = await Promise.all([get(`/runs/${CUR}`), get(`/runs/${CUR}/events`,{after:SEEN})]);
   }catch(e){ $('#rundetail').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return true; }
   if(evs.length){ EVENTS = EVENTS.concat(evs); SEEN = evs[evs.length-1].seq; }
+  if(run.kind === 'epic'){
+    try{ ITEMS = (await get(`/runs/${CUR}/items`)).items; }catch(e){ ITEMS = null; }
+  }else{ ITEMS = null; }
   renderRun(run);
   return !['running','queued'].includes(run.status);
 }
 
 function renderRun(run){
+  const isEpic = run.kind === 'epic';
+  const TABLE = isEpic ? EPHASES : PHASES;
   const done = new Set(EVENTS.map(e=>e.phase).filter(Boolean));
   const active = run.phase;
   const running = ['running','queued'].includes(run.status);
-  const order = PHASES.map(p=>p.key);
+  const order = TABLE.map(p=>p.key);
   const ai = order.indexOf(active);
 
-  const steps = PHASES.map((p,i)=>{
+  const steps = TABLE.map((p,i)=>{
     let cls = 'stp';
     if(!p.implemented) cls += ' future';
     if(p.key === active && running) cls += ' on';
@@ -584,10 +659,11 @@ function renderRun(run){
                 failed:'b-low'}[run.status] || 'b-low';
   const gate = run.status === 'awaiting_approval' ? `
       <div class="gate">
-        <div class="gt">Nothing has been pushed. Approving opens a pull request
-          against <code>dev</code>, ready for review.</div>
+        <div class="gt">${isEpic
+          ? 'No code has been written yet. Approving the split runs each piece as its own change — and every one of them still stops for your review before its PR is opened.'
+          : 'Nothing has been pushed. Approving opens a pull request against <code>dev</code>, ready for review.'}</div>
         <div class="row" style="margin:11px 0 0">
-          <button class="go" id="okbtn">Approve &amp; open PR</button>
+          <button class="go" id="okbtn">${isEpic?'Approve the split':'Approve &amp; open PR'}</button>
           <button class="go" id="nobtn"
                   style="background:#33383f;color:var(--ink2)">Reject</button>
         </div>
@@ -628,6 +704,7 @@ function renderRun(run){
           ${counts.error?`<span class="badge b-low" style="color:#f85149">${counts.error} errors</span>`:''}
         </div>
       </div>
+      ${isEpic ? itemsPanel(ITEMS) : ''}
       <div class="chips">
         ${[['all','Everything'],['finding','Findings only'],['problem','Warnings & errors']]
           .map(([k,l])=>`<button class="chip${FILTER===k?' on':''}" data-f="${k}">${l}</button>`).join('')}
@@ -662,7 +739,7 @@ function renderRun(run){
   let lastPhase = '\0';
   shown.forEach(e=>{
     if(e.phase !== lastPhase){
-      const p = PHASES.find(x=>x.key===e.phase);
+      const p = TABLE.find(x=>x.key===e.phase);
       tl.appendChild(el(`<div class="phhdr">${esc(p?p.title:(e.phase||'run'))}</div>`));
       lastPhase = e.phase;
     }

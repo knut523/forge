@@ -6,6 +6,7 @@ that), no background work, no platform dependencies.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -20,8 +21,9 @@ from ..indexer import wayfinder as W
 from ..indexer.store import Store
 from ..indexer import prs as PRs
 from ..runs import engine as RunEngine
+from ..runs import epic as EpicEngine
 from ..runs.memory import KINDS, MemoryStore, remember_rejection
-from ..runs.store import IMPLEMENTED, PHASES, RunStore
+from ..runs.store import EPIC_PHASES, IMPLEMENTED, PHASES, RunStore
 
 DB = os.environ.get("FORGE_DB", "/data/forge.db")
 UI = Path(__file__).resolve().parent.parent / "ui"
@@ -274,12 +276,52 @@ class RunIn(BaseModel):
     target: str | None = None
 
 
+class EpicIn(BaseModel):
+    goal: str
+    repos: list[str]
+
+
+@app.post("/api/epics")
+def epic_create(body: EpicIn):
+    """A feature: framed, split into minimal PRs, then gated as a SPLIT."""
+    store = _store()
+    try:
+        known = {r["name"] for r in Q.list_repos(store)}
+    finally:
+        store.close()
+    bad = [r for r in body.repos if r not in known]
+    if bad or not body.repos:
+        raise HTTPException(status_code=400,
+                            detail=f"not indexed: {', '.join(bad) or '(none given)'}")
+    if not body.goal.strip():
+        raise HTTPException(status_code=400, detail="goal is required")
+    rs = RunStore()
+    try:
+        eid = rs.create(body.repos[0], body.goal.strip(),
+                        json.dumps(body.repos), None, kind="epic")
+    finally:
+        rs.close()
+    EpicEngine.start(eid, DB)
+    return {"id": eid}
+
+
+@app.get("/api/runs/{run_id}/items")
+def run_items(run_id: str):
+    rs = RunStore()
+    try:
+        return {"items": rs.items(run_id), "children": rs.children(run_id)}
+    finally:
+        rs.close()
+
+
 @app.get("/api/phases")
-def phases():
+def phases(kind: str = "run"):
     """The whole road, including the parts not built — so a short run is never
     mistaken for a complete one."""
-    return [{"key": k, "title": t, "blurb": b, "implemented": k in IMPLEMENTED}
-            for k, t, b in PHASES]
+    table = EPIC_PHASES if kind == "epic" else PHASES
+    return [{"key": k, "title": t, "blurb": b,
+             "implemented": kind == "epic" or k in IMPLEMENTED}
+            for k, t, b in table]
 
 
 @app.post("/api/runs")
@@ -358,13 +400,19 @@ def run_approve(run_id: str):
             raise HTTPException(
                 status_code=409,
                 detail=f"this run is {r['status']}, not waiting for approval")
-        rs.emit(run_id, "approve", "done", "Approved by a human — opening the PR")
-        rs.db.execute("UPDATE runs SET status='running', phase='pr' WHERE id=?",
-                      (run_id,))
+        is_epic = r.get("kind") == "epic"
+        rs.emit(run_id, "approve", "done",
+                "Split approved — running each pull request in turn" if is_epic
+                else "Approved by a human — opening the PR")
+        rs.db.execute("UPDATE runs SET status='running', phase=? WHERE id=?",
+                      ("execute" if is_epic else "pr", run_id))
         rs.db.commit()
     finally:
         rs.close()
-    RunEngine.approve(run_id)
+    if is_epic:
+        EpicEngine.advance(run_id, DB)
+    else:
+        RunEngine.approve(run_id)
     return {"approved": run_id}
 
 
@@ -396,8 +444,11 @@ def run_reject(run_id: str, body: RejectIn | None = None):
                   reason=f"Rejected: {note}",
                   next_action="The workspace is kept — start a new run with a "
                               "sharper goal, or fix it by hand.")
+        parent = r.get("parent_id")
     finally:
         rs.close()
+    if parent:
+        EpicEngine.on_child_finished(run_id, DB)
     return {"rejected": run_id}
 
 
