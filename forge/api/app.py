@@ -18,6 +18,7 @@ from ..config.store import GITHUB_READ, GITHUB_WRITE, ConfigStore
 from ..indexer import query as Q
 from ..indexer import wayfinder as W
 from ..indexer.store import Store
+from ..indexer import prs as PRs
 from ..runs import engine as RunEngine
 from ..runs.store import IMPLEMENTED, PHASES, RunStore
 
@@ -353,6 +354,63 @@ def run_delete(run_id: str):
         return {"deleted": run_id}
     finally:
         rs.close()
+
+
+# ─── pull requests ──────────────────────────────────────────────────────────
+
+def _read_token() -> str | None:
+    c = _cfg()
+    try:
+        return c.get_secret(GITHUB_READ)
+    finally:
+        c.close()
+
+
+def _indexed_origins() -> dict[str, str]:
+    """GitHub full_name -> local index name, for the repos we can reason about."""
+    store = _store()
+    try:
+        return {r["origin"]: r["name"] for r in Q.list_repos(store) if r.get("origin")}
+    finally:
+        store.close()
+
+
+@app.get("/api/prs")
+def prs_list(repos: str | None = None):
+    """Open PRs across the indexed repos (or an explicit owner/repo list)."""
+    token = _read_token()
+    origins = _indexed_origins()
+    wanted = [s.strip() for s in (repos or "").split(",") if s.strip()] or list(origins)
+    if not token:
+        return {"authenticated": False, "prs": [], "errors": [], "repos": wanted,
+                "why": "No GitHub READ token set. Add one in Settings — listing "
+                       "pull requests needs it, and only the read token is used."}
+    if not wanted:
+        return {"authenticated": True, "prs": [], "errors": [], "repos": [],
+                "why": "None of the indexed repos has a GitHub origin. Index a "
+                       "repo cloned from GitHub, or pass ?repos=owner/name."}
+    items, errs = PRs.list_open(wanted, token)
+    for p in items:
+        p["indexed_as"] = origins.get(p["repo"])
+    return {"authenticated": True, "prs": items, "errors": errs, "repos": wanted}
+
+
+@app.get("/api/prs/{owner}/{repo}/{number}")
+def pr_detail(owner: str, repo: str, number: int):
+    token = _read_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="no GitHub read token set")
+    try:
+        d = PRs.detail(owner, repo, number, token)
+    except PRs.GHError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    store = _store()
+    try:
+        local = _indexed_origins().get(f"{owner}/{repo}")
+        d["impact"] = PRs.impact_for(d, store, local)
+    finally:
+        store.close()
+    return d
 
 
 @app.get("/")

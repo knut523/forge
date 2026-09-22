@@ -11,8 +11,12 @@ degraded — a missing model is a fact to record, not a crash.
 """
 from __future__ import annotations
 
+import json
+import os
+import re
 import threading
 import traceback
+from pathlib import Path
 
 from ..config.store import ConfigStore
 from ..config import llm
@@ -126,7 +130,7 @@ def _impact(rs: RunStore, rid: str, idx: IndexStore, repo: str,
 
 
 def _plan(rs: RunStore, rid: str, cfg: ConfigStore, goal: str, repo: str,
-          cap: dict, imp: dict) -> None:
+          cap: dict, imp: dict) -> dict:
     rs.set_phase(rid, "plan")
     model, token, why = _pick_model(cfg)
 
@@ -138,7 +142,7 @@ def _plan(rs: RunStore, rid: str, cfg: ConfigStore, goal: str, repo: str,
         rs.emit(rid, "plan", "info",
                 "The grounding above is real and complete; only the drafting step "
                 "is missing. Register a model with the 'engineer' role and re-run.")
-        return
+        return {"blocked": why}
 
     rs.emit(rid, "plan", "step", f"Drafting with {model['name']}",
             {"provider": model["provider"], "model": model["model_id"]})
@@ -147,9 +151,221 @@ def _plan(rs: RunStore, rid: str, cfg: ConfigStore, goal: str, repo: str,
         f"GOAL\n{goal}\n\nGROUNDED FACTS ABOUT THE REPOSITORY\n{facts}")
     if text is None:
         rs.emit(rid, "plan", "error", "The model call failed", meta, level="error")
-        return
+        return {"error": meta.get("error")}
     rs.emit(rid, "plan", "plan", "Spec and plan", {"text": text, **meta})
-    rs.emit(rid, "plan", "done", "Plan drafted — review it before Build runs")
+    rs.emit(rid, "plan", "done", "Plan drafted")
+    return {"text": text}
+
+
+BUILD_SYSTEM = (
+    "You are a senior engineer implementing an approved plan in an existing "
+    "codebase. You are given the plan and the CURRENT CONTENT of the files it "
+    "names. Return the COMPLETE new content of every file you change — never a "
+    "diff, never an ellipsis, never a placeholder. Do not invent APIs: use only "
+    "what the given files and facts show exists. Output ONLY a single JSON "
+    'object of exactly this shape, with no prose and no markdown fences:\n'
+    '{"files":[{"path":"<repo-relative path>","content":"<full file text>"}],'
+    '"notes":"<one short paragraph on what you changed and why>"}'
+)
+
+STUB_MARKERS = ("todo", "your code here", "in a real implementation",
+                "notimplementederror", "fixme", "placeholder")
+
+
+def _repo_root(idx: IndexStore, repo: str) -> Path | None:
+    """Where the working tree actually is, now — not where it was at index time.
+
+    `repos.root` records the path the indexer saw, which was a container mount
+    that may no longer exist. The /repos/<name> convention is the durable
+    fallback, and if neither resolves we say so rather than guessing.
+    """
+    row = idx.db.execute("SELECT root FROM repos WHERE name=?", (repo,)).fetchone()
+    for cand in ([Path(row["root"])] if row and row["root"] else []) + \
+                [Path(os.environ.get("FORGE_REPOS", "/repos")) / repo]:
+        if cand.is_dir():
+            return cand
+    return None
+
+
+def _extract_json(text: str) -> dict | None:
+    """Models wrap JSON in fences and commentary however they like.
+
+    Reasoning models put a <think> block first, and that block is full of
+    braces and quoted code — feed it to a brace matcher and it will happily
+    parse some fragment of the model's deliberation as the answer. Strip it
+    before looking for anything.
+    """
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I)
+    text = re.sub(r"<think>.*$", "", text, flags=re.S | re.I)   # unterminated = truncated
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    start = text.find("{")
+    while start != -1:                       # try each '{' as a candidate start
+        depth, instr, esc = 0, False, False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if instr:
+                esc = (ch == "\\") and not esc
+                if ch == '"' and not esc:
+                    instr = False
+                continue
+            if ch == '"':
+                instr, esc = True, False
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except Exception:
+                        break
+        start = text.find("{", start + 1)
+    return None
+
+
+def _build(rs: RunStore, rid: str, cfg: ConfigStore, idx: IndexStore, repo: str,
+           goal: str, plan_text: str, target: str | None) -> dict:
+    """Write the change into an isolated workspace. Never touches the source tree."""
+    rs.set_phase(rid, "build")
+    model, token, why = _pick_model(cfg)
+    if model is None:
+        rs.emit(rid, "build", "warn", "No engineer model — nothing built",
+                {"reason": why}, level="warn")
+        return {"blocked": why}
+
+    root = _repo_root(idx, repo)
+    if root is None:
+        msg = (f"No working tree for {repo!r}. The index records where the repo "
+               f"was mounted when it was indexed; that path is gone. Mount it at "
+               f"/repos/{repo} (or re-index from there) so Build can read files.")
+        rs.emit(rid, "build", "warn", "No working tree available",
+                {"reason": msg}, level="warn")
+        return {"blocked": msg}
+
+    # Give the model the files the plan is actually about, not the whole repo.
+    wanted: list[str] = []
+    if target and "/" in target:
+        wanted.append(target)
+    for m in re.findall(r"[\w./-]+\.(?:py|ts|tsx|js|jsx)", plan_text or ""):
+        if m not in wanted:
+            wanted.append(m)
+    seen: list[dict] = []
+    for rel in wanted[:6]:
+        p = root / rel
+        if not p.is_file():
+            hit = idx.db.execute(
+                "SELECT f.path FROM files f JOIN repos r ON r.id=f.repo_id"
+                " WHERE r.name=? AND f.path LIKE ? ORDER BY LENGTH(f.path) LIMIT 1",
+                (repo, f"%{rel}")).fetchone()
+            p = root / hit["path"] if hit else p
+            rel = hit["path"] if hit else rel
+        if p.is_file():
+            try:
+                body = p.read_text("utf-8", "replace")
+            except OSError:
+                continue
+            seen.append({"path": rel, "content": body[:60000]})
+    rs.emit(rid, "build", "step", f"Building with {model['name']}",
+            {"files_given_to_the_model": [f["path"] for f in seen] or "none",
+             "workspace": f"/work/{rid}"})
+
+    ctx = "\n\n".join(f"--- FILE {f['path']} ---\n{f['content']}" for f in seen)
+    text, meta = llm.complete(
+        model, token, BUILD_SYSTEM,
+        f"GOAL\n{goal}\n\nPLAN\n{plan_text}\n\nCURRENT FILES\n{ctx or '(none supplied)'}",
+        max_tokens=24000)
+    if text is None:
+        rs.emit(rid, "build", "error", "The model call failed", meta, level="error")
+        return {"error": meta.get("error")}
+
+    obj = _extract_json(text) or {}
+    files = obj.get("files")
+    if not isinstance(files, list) or not files:
+        # Distinguish "it rambled" from "it was cut off mid-answer" — the fix is
+        # different (prompt vs token budget) and the raw tail shows which.
+        truncated = "<think>" in text and "</think>" not in text
+        rs.emit(rid, "build", "error",
+                "The model output was truncated mid-reasoning" if truncated
+                else "The model returned no usable files",
+                {"truncated": truncated, "chars": len(text),
+                 "output_tokens": meta.get("output_tokens"),
+                 "tail": text[-1200:]}, level="error")
+        return {"error": "build output truncated" if truncated
+                         else "unparseable build output"}
+
+    ws = Path(os.environ.get("FORGE_WORK", "/work")) / rid
+    written = []
+    for f in files:
+        if not isinstance(f, dict):
+            continue
+        rel, content = str(f.get("path", "")).strip(), f.get("content")
+        if not rel or not isinstance(content, str):
+            continue
+        dest = (ws / rel).resolve()
+        if not str(dest).startswith(str(ws.resolve())):   # path-escape guard
+            rs.emit(rid, "build", "warn", f"Refused a path outside the workspace: {rel}",
+                    level="warn")
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+        before = next((s["content"] for s in seen if s["path"] == rel), None)
+        written.append({"path": rel, "lines": content.count("\n") + 1,
+                        "bytes": len(content),
+                        "change": "modified" if before is not None else "new"})
+        rs.emit(rid, "build", "file", f"{'Modified' if before is not None else 'Created'} {rel}",
+                {"lines": content.count("\n") + 1, "preview": content[:1500]})
+    if obj.get("notes"):
+        rs.emit(rid, "build", "info", "What the engineer says it did",
+                {"text": str(obj["notes"])[:2000], **meta})
+    rs.emit(rid, "build", "done", f"Wrote {len(written)} file(s) into the workspace",
+            written)
+    return {"files": written, "workspace": str(ws)}
+
+
+def _verify(rs: RunStore, rid: str, built: dict) -> dict:
+    """Cheap, honest checks on what was written. Not a test suite — and says so."""
+    rs.set_phase(rid, "verify")
+    files = built.get("files") or []
+    if not files:
+        rs.emit(rid, "verify", "info", "Nothing was built, so there is nothing to verify")
+        return {"ok": False}
+
+    ws = Path(built["workspace"])
+    problems, checked = [], 0
+    for f in files:
+        p = ws / f["path"]
+        if not p.is_file():
+            continue
+        src = p.read_text("utf-8", "replace")
+        if p.suffix == ".py":
+            checked += 1
+            try:
+                compile(src, f["path"], "exec")
+            except SyntaxError as e:
+                problems.append({"file": f["path"], "problem": "python syntax error",
+                                 "line": e.lineno, "detail": str(e.msg)})
+        low = src.lower()
+        hit = [m for m in STUB_MARKERS if m in low]
+        if hit:
+            problems.append({"file": f["path"], "problem": "looks like a stub",
+                             "markers": hit})
+        if not src.strip():
+            problems.append({"file": f["path"], "problem": "file is empty"})
+
+    if problems:
+        rs.emit(rid, "verify", "warn", f"{len(problems)} problem(s) in the written files",
+                problems, level="warn")
+    else:
+        rs.emit(rid, "verify", "done",
+                f"No syntax errors or stub markers ({checked} python file(s) compiled)")
+    rs.emit(rid, "verify", "info", "What this check does NOT cover",
+            {"note": "the repo's own test suite and typechecker have not been run — "
+                     "that needs the project's toolchain in the workspace"})
+    return {"ok": not problems, "problems": problems}
 
 
 def _facts_block(repo: str, cap: dict, imp: dict) -> str:
@@ -191,11 +407,42 @@ def execute(run_id: str, index_db: str) -> None:
 
         cap = _capture(rs, run_id, idx, repo)
         imp = _impact(rs, run_id, idx, repo, target)
-        _plan(rs, run_id, cfg, goal, repo, cap, imp)
 
+        plan = _plan(rs, run_id, cfg, goal, repo, cap, imp)
+        if plan.get("blocked"):
+            return rs.finish(run_id, "blocked", reason=(
+                "Stopped at Plan: " + plan["blocked"]), next_action=(
+                "Add an LLM key in Settings and register a model with the "
+                "'engineer' role, then start the run again."))
+        if plan.get("error"):
+            return rs.finish(run_id, "failed", error=plan["error"],
+                             reason="The planning model call failed",
+                             next_action="Check the model with Test in Settings.")
+
+        built = _build(rs, run_id, cfg, idx, repo, goal, plan["text"], target)
+        if built.get("blocked"):
+            return rs.finish(run_id, "blocked",
+                             reason="Stopped at Build: " + built["blocked"],
+                             next_action=f"Make the working tree readable at "
+                                         f"/repos/{repo}, then run again.")
+        if built.get("error"):
+            return rs.finish(run_id, "failed", error=built["error"],
+                             reason="Build did not produce usable files",
+                             next_action="Inspect the Build events — the raw model "
+                                         "output is attached.")
+
+        _verify(rs, run_id, built)
+
+        # Deliberately NOT "done": the work exists but no human has seen it and
+        # nothing has been pushed. Saying "done" here is what made the last run
+        # look finished when it had barely started.
         rs.emit(run_id, None, "info", "Reached the end of the implemented phases",
-                {"next": "Build, Verify, Review, Approve and PR are not built yet"})
-        rs.finish(run_id, "done")
+                {"built_in": built.get("workspace"),
+                 "not_built_yet": "Review (screenshots + diff), Approve, PR"})
+        rs.finish(run_id, "incomplete",
+                  reason="Built and checked, but Review, Approve and PR are not "
+                         "implemented yet — nothing has been shown to a human or pushed.",
+                  next_action="Inspect the written files in the Build phase below.")
     except Exception as e:
         rs.emit(run_id, None, "error", f"Run failed: {type(e).__name__}",
                 {"error": str(e)[:400], "trace": traceback.format_exc()[-1200:]},

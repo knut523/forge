@@ -31,7 +31,16 @@ PHASES = [
     ("approve", "Approve",  "A human decides — nothing reaches GitHub before this"),
     ("pr",      "PR",       "Push the branch and open the pull request"),
 ]
-IMPLEMENTED = {"capture", "impact", "plan"}
+IMPLEMENTED = {"capture", "impact", "plan", "build", "verify"}
+
+# Terminal states, chosen so none of them can be read as "the goal was reached"
+# when it wasn't. A run that merely ran out of implemented phases is NOT done.
+TERMINAL = {
+    "complete":   "every phase ran and the work is ready for a human",
+    "incomplete": "ran out of road — the remaining phases are not built yet",
+    "blocked":    "a phase could not do its job and the run stopped there",
+    "failed":     "an error ended the run",
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -45,7 +54,9 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     finished_at TEXT,
-    error      TEXT
+    error      TEXT,
+    stopped_reason TEXT,
+    next_action    TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_runs_repo ON runs(repo, created_at DESC);
 
@@ -77,6 +88,15 @@ class RunStore:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the first runs were recorded."""
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(runs)")}
+        for col in ("stopped_reason", "next_action"):
+            if col not in have:
+                self.db.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        self.db.commit()
 
     def close(self) -> None:
         self.db.commit()
@@ -113,10 +133,17 @@ class RunStore:
             (phase, _now(), run_id))
         self.db.commit()
 
-    def finish(self, run_id: str, status: str, error: str | None = None) -> None:
+    def finish(self, run_id: str, status: str, error: str | None = None,
+               reason: str | None = None, next_action: str | None = None) -> None:
+        """A terminal state always carries WHY it stopped and what unblocks it.
+
+        Without that, a run that halted after Plan looks identical to one that
+        shipped a PR — which is exactly the confusion this replaced.
+        """
         self.db.execute(
-            "UPDATE runs SET status=?, error=?, finished_at=?, updated_at=? WHERE id=?",
-            (status, error, _now(), _now(), run_id))
+            "UPDATE runs SET status=?, error=?, stopped_reason=?, next_action=?,"
+            " finished_at=?, updated_at=? WHERE id=?",
+            (status, error, reason, next_action, _now(), _now(), run_id))
         self.db.commit()
 
     # ─── reads ──────────────────────────────────────────────────────────────

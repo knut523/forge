@@ -88,7 +88,15 @@
   .runrow.sel{background:var(--panel2);box-shadow:inset 2px 0 0 var(--accent)}
   .dot{width:8px;height:8px;border-radius:50%;flex:none;margin-top:6px}
   .d-running{background:var(--accent);animation:pulse 1.4s infinite}
-  .d-done{background:var(--hi)} .d-failed{background:#f85149} .d-queued{background:var(--ink3)}
+  .d-complete{background:var(--hi)} .d-done{background:var(--hi)}
+  .d-incomplete{background:var(--med)} .d-blocked{background:var(--accent)}
+  .d-failed{background:#f85149} .d-queued{background:var(--ink3)}
+  .blocker{border:1px solid rgba(240,136,62,.35);background:rgba(240,136,62,.08);
+           border-radius:10px;padding:13px 15px;margin-bottom:14px}
+  .blocker .bt{font-size:13px;color:#e8b48a;line-height:1.5}
+  .blocker .ba{font-size:12.5px;color:var(--ink2);margin-top:7px;
+               padding-top:7px;border-top:1px solid rgba(240,136,62,.22)}
+  .blocker .ba b{color:var(--accent)}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
   .rg{font-size:12.5px;line-height:1.35;overflow:hidden;display:-webkit-box;
       -webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -152,6 +160,7 @@
     <button data-tab="repos">Repos</button>
     <button data-tab="explore">Explore</button>
     <button data-tab="wayfinder">Wayfinder</button>
+    <button data-tab="prs">PRs</button>
     <button data-tab="settings">Settings</button>
   </nav>
 </header>
@@ -160,6 +169,7 @@
   <div id="repos" hidden></div>
   <div id="explore" hidden></div>
   <div id="wayfinder" hidden></div>
+  <div id="prs" hidden></div>
   <div id="settings" hidden></div>
 </main>
 
@@ -183,10 +193,11 @@ let REPOS = [];
 /* ── tabs ─────────────────────────────────────────────────────────── */
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
-  ['coder','repos','explore','wayfinder','settings'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
+  ['coder','repos','explore','wayfinder','prs','settings'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
   if(b.dataset.tab==='explore') $('#q')?.focus();
   if(b.dataset.tab==='settings') loadSettings();
   if(b.dataset.tab==='coder') loadRuns();
+  if(b.dataset.tab==='prs') loadPRs();
 });
 
 /* ── repos ────────────────────────────────────────────────────────── */
@@ -498,10 +509,22 @@ function renderRun(run){
   }).join('');
 
   const last = EVENTS[EVENTS.length-1];
-  const nowText = running
-    ? (last ? last.title : 'starting…')
-    : (run.status === 'failed' ? (run.error || 'failed') : 'finished');
-  const pill = {running:'b-medium',queued:'b-low',done:'b-high',failed:'b-low'}[run.status]||'b-low';
+  // A terminal run says what it actually ended as — never a bare "finished",
+  // which is what made a run that stopped at Plan look like a completed one.
+  const ENDED = {complete:'complete — ready for a human',
+                 incomplete:'stopped — the road runs out here',
+                 blocked:'blocked — it could not continue',
+                 failed:'failed'};
+  const nowText = running ? (last ? last.title : 'starting…')
+                          : (ENDED[run.status] || run.status);
+  const pill = {running:'b-medium', queued:'b-low', complete:'b-high',
+                incomplete:'b-medium', blocked:'b-medium', done:'b-high',
+                failed:'b-low'}[run.status] || 'b-low';
+  const blocker = (!running && (run.stopped_reason || run.error)) ? `
+      <div class="blocker">
+        <div class="bt">${esc(run.stopped_reason || run.error)}</div>
+        ${run.next_action?`<div class="ba"><b>Next:</b> ${esc(run.next_action)}</div>`:''}
+      </div>` : '';
 
   const counts = {finding:0, warn:0, error:0};
   EVENTS.forEach(e=>{ if(e.level==='warn') counts.warn++; else if(e.level==='error') counts.error++;
@@ -518,6 +541,7 @@ function renderRun(run){
         · model ${esc(run.model || 'none')} · ${esc((run.created_at||'').replace('T',' ').replace('+00:00',''))}
       </div>
       <div class="stepper">${steps}</div>
+      ${blocker}
       <div class="now">
         <div class="dot d-${esc(run.status)}" style="margin:0"></div>
         <div><b>${esc(nowText)}</b></div>
@@ -568,6 +592,104 @@ function renderRun(run){
       row.onclick = ()=>{ b.hidden = !b.hidden; };
     }
   });
+}
+
+/* ── pull requests ────────────────────────────────────────────────── */
+function ago(iso){
+  if(!iso) return '';
+  const s = (Date.now() - new Date(iso).getTime())/1000;
+  if(s < 3600) return Math.round(s/60)+'m';
+  if(s < 86400) return Math.round(s/3600)+'h';
+  return Math.round(s/86400)+'d';
+}
+
+async function loadPRs(){
+  const box = $('#prs');
+  box.innerHTML = '<div class="spin">asking GitHub…</div>';
+  let d;
+  try{ d = await get('/prs'); }
+  catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+
+  box.innerHTML = '';
+  if(d.why){
+    box.appendChild(el(`<div class="blocker"><div class="bt">${esc(d.why)}</div>
+      <div class="ba"><b>Note:</b> forge only ever uses the READ token here — listing
+      and reading pull requests cannot approve, merge, comment or push.</div></div>`));
+  }
+  if(d.repos?.length){
+    box.appendChild(el(`<div class="hint">watching ${d.repos.length} repo(s):
+      <code>${esc(d.repos.join(', '))}</code></div>`));
+  }
+  (d.errors||[]).forEach(e=>box.appendChild(
+    el(`<div class="note">${esc(e.repo)}: ${esc(e.error)}</div>`)));
+
+  if(!d.prs?.length){
+    box.appendChild(el('<div class="list"><div class="empty">No open pull requests.</div></div>'));
+    return;
+  }
+  box.appendChild(el('<div class="sec">Open pull requests</div>'));
+  const list = el('<div class="list"></div>');
+  d.prs.forEach(p=>{
+    const row = el(`<div class="item">
+        <span class="kind">#${p.number}</span>
+        <div style="min-width:0;flex:1">
+          <div class="qn">${esc(p.title)}</div>
+          <div class="sig">${esc(p.repo)} · ${esc(p.author||'?')} ·
+            <code>${esc(p.head||'')}</code> → <code>${esc(p.base||'')}</code>
+            ${p.draft?' · draft':''}${p.indexed_as?'':' · not indexed locally'}</div>
+        </div>
+        <div class="loc">${esc(ago(p.updated_at))} ago</div>
+      </div>`);
+    const det = el('<div class="body" hidden><div class="spin">loading…</div></div>');
+    let loaded = false;
+    row.onclick = async ()=>{
+      det.hidden = !det.hidden;
+      if(loaded || det.hidden) return;
+      loaded = true;
+      try{
+        const [owner, name] = p.repo.split('/');
+        det.innerHTML = prBody(await get(`/prs/${owner}/${name}/${p.number}`));
+      }catch(e){ det.innerHTML = `<span class="badge b-low">failed</span> ${esc(e.message)}`; loaded=false; }
+    };
+    list.appendChild(row); list.appendChild(det);
+  });
+  box.appendChild(list);
+}
+
+function prBody(d){
+  const imp = d.impact || {};
+  let impHtml;
+  if(!imp.available){
+    impHtml = `<div class="muted">${esc(imp.why||'impact unavailable')}</div>`;
+  }else if(!imp.reaches?.length){
+    impHtml = `<div class="muted">No cross-repo impact found across
+      ${imp.checked} checked file(s).</div>`;
+  }else{
+    impHtml = imp.reaches.map(r=>`
+      <div style="margin-bottom:9px">
+        <span class="badge b-${esc(r.confidence)}">${esc(r.confidence)}</span>
+        <b style="font-family:var(--mono)">${esc(r.repo)}</b>
+        <span class="muted">via ${esc(r.files.join(', '))}</span>
+        ${r.evidence.map(e=>`<div class="muted" style="font-family:var(--mono);font-size:11px;margin-left:4px">
+            ${esc(e.signal)}: ${esc(e.their_path||e.name||'')} — ${esc(e.file||'')}:${esc(e.line||'')}
+          </div>`).join('')}
+      </div>`).join('');
+  }
+  const files = (d.files||[]).slice(0,60).map(f=>
+    `<tr><td>${esc(f.status)}</td><td>${esc(f.path)}</td>
+      <td style="color:var(--hi)">+${f.additions}</td>
+      <td style="color:#f85149">−${f.deletions}</td></tr>`).join('');
+  return `
+    <div style="margin-bottom:12px">
+      <div class="sec" style="margin-top:0">Reaches other repos</div>
+      ${impHtml}
+    </div>
+    <div class="sec">Changed files (${d.changed_files ?? (d.files||[]).length}) ·
+      <span style="color:var(--hi)">+${d.additions??'?'}</span>
+      <span style="color:#f85149">−${d.deletions??'?'}</span></div>
+    <table>${files}</table>
+    ${d.body?`<div class="sec">Description</div><div class="prose">${esc(d.body.slice(0,3000))}</div>`:''}
+    <div style="margin-top:12px"><a href="${esc(d.url)}" target="_blank" rel="noopener">open on GitHub ↗</a></div>`;
 }
 
 /* ── settings: credentials + models ───────────────────────────────── */

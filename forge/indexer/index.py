@@ -35,6 +35,16 @@ def _git(root: Path, *args: str) -> str:
         return ""
 
 
+def _owner_repo(remote: str) -> str | None:
+    """github.com owner/name out of any remote spelling (https, ssh, with .git)."""
+    if not remote or "github.com" not in remote:
+        return None
+    tail = remote.split("github.com", 1)[1].lstrip(":/")
+    tail = tail[:-4] if tail.endswith(".git") else tail
+    parts = [p for p in tail.split("/") if p]
+    return "/".join(parts[:2]) if len(parts) >= 2 else None
+
+
 def _candidate_files(root: Path, git_only: bool = False) -> list[str]:
     """Repo-relative paths worth parsing.
 
@@ -82,7 +92,10 @@ def index_repo(root: str | Path, name: str | None = None,
     store = Store(db_path)
     head = _git(root, "rev-parse", "HEAD") or None
     branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD") or None
-    repo_id = store.reset_repo(name, str(root), head, branch)
+    # owner/name from the remote — the only durable link between a local index
+    # and the GitHub repo whose pull requests we later want to reason about.
+    origin = _owner_repo(_git(root, "remote", "get-url", "origin"))
+    repo_id = store.reset_repo(name, str(root), head, branch, origin)
 
     paths = _candidate_files(root, git_only)
     if progress:

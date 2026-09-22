@@ -26,8 +26,8 @@ def _repo_id(store: Store, repo: str | None) -> int:
 
 def list_repos(store: Store) -> list[dict]:
     return [dict(r) for r in store.db.execute(
-        "SELECT name, branch, head_sha, indexed_at, file_count, symbol_count,"
-        " ref_count, resolved_pct FROM repos ORDER BY name")]
+        "SELECT name, branch, head_sha, origin, indexed_at, file_count,"
+        " symbol_count, ref_count, resolved_pct FROM repos ORDER BY name")]
 
 
 def overview(store: Store, repo: str | None = None) -> dict:

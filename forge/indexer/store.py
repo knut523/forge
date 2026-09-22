@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS repos (
     root         TEXT NOT NULL,
     head_sha     TEXT,
     branch       TEXT,
+    origin       TEXT,
     indexed_at   TEXT,
     file_count   INTEGER DEFAULT 0,
     symbol_count INTEGER DEFAULT 0,
@@ -136,6 +137,10 @@ class Store:
         self.db.execute("PRAGMA synchronous=NORMAL")
         self._migrate_fts()
         self.db.executescript(SCHEMA)
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(repos)")}
+        if "origin" not in have:            # added once PRs needed a GitHub mapping
+            self.db.execute("ALTER TABLE repos ADD COLUMN origin TEXT")
+            self.db.commit()
 
     def _migrate_fts(self) -> None:
         """Replace a pre-existing contentless symbols_fts, rebuilding its rows.
@@ -165,7 +170,7 @@ class Store:
     # ─── write path ─────────────────────────────────────────────────────────
 
     def reset_repo(self, name: str, root: str, head_sha: str | None,
-                   branch: str | None) -> int:
+                   branch: str | None, origin: str | None = None) -> int:
         """Drop any previous index for this repo and return a fresh repo id.
 
         A full re-index rather than an incremental one: at this size it takes
@@ -180,8 +185,8 @@ class Store:
                 "(SELECT id FROM symbols WHERE repo_id = ?)", (old,))
             self.db.execute("DELETE FROM repos WHERE id = ?", (old,))
         cur = self.db.execute(
-            "INSERT INTO repos (name, root, head_sha, branch) VALUES (?,?,?,?)",
-            (name, root, head_sha, branch))
+            "INSERT INTO repos (name, root, head_sha, branch, origin) VALUES (?,?,?,?,?)",
+            (name, root, head_sha, branch, origin))
         self.db.commit()
         return int(cur.lastrowid)
 
