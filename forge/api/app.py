@@ -18,6 +18,8 @@ from ..config.store import GITHUB_READ, GITHUB_WRITE, ConfigStore
 from ..indexer import query as Q
 from ..indexer import wayfinder as W
 from ..indexer.store import Store
+from ..runs import engine as RunEngine
+from ..runs.store import IMPLEMENTED, PHASES, RunStore
 
 DB = os.environ.get("FORGE_DB", "/data/forge.db")
 UI = Path(__file__).resolve().parent.parent / "ui"
@@ -260,6 +262,97 @@ def provider_models(provider: str, secret_key: str | None = None,
         return {"models": res.get("models", []), "detail": res.get("detail")}
     finally:
         c.close()
+
+
+# ─── runs (the coder) ───────────────────────────────────────────────────────
+
+class RunIn(BaseModel):
+    repo: str
+    goal: str
+    target: str | None = None
+
+
+@app.get("/api/phases")
+def phases():
+    """The whole road, including the parts not built — so a short run is never
+    mistaken for a complete one."""
+    return [{"key": k, "title": t, "blurb": b, "implemented": k in IMPLEMENTED}
+            for k, t, b in PHASES]
+
+
+@app.post("/api/runs")
+def run_create(body: RunIn):
+    store = _store()
+    try:
+        names = {r["name"] for r in Q.list_repos(store)}
+    finally:
+        store.close()
+    if body.repo not in names:
+        raise HTTPException(status_code=400,
+                            detail=f"{body.repo!r} is not indexed")
+    if not body.goal.strip():
+        raise HTTPException(status_code=400, detail="goal is required")
+
+    rs = RunStore()
+    try:
+        cfg = ConfigStore()
+        try:
+            eng = next((m for m in cfg.list_models()
+                        if m["role"] == "engineer" and m["enabled"]), None)
+        finally:
+            cfg.close()
+        rid = rs.create(body.repo, body.goal.strip(),
+                        (body.target or "").strip() or None,
+                        eng["name"] if eng else None)
+    finally:
+        rs.close()
+    RunEngine.start(rid, DB)
+    return {"id": rid}
+
+
+@app.get("/api/runs")
+def run_list(repo: str | None = None, limit: int = Query(50, le=200)):
+    rs = RunStore()
+    try:
+        return rs.list(repo, limit)
+    finally:
+        rs.close()
+
+
+@app.get("/api/runs/{run_id}")
+def run_get(run_id: str):
+    rs = RunStore()
+    try:
+        r = rs.get(run_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        return r
+    finally:
+        rs.close()
+
+
+@app.get("/api/runs/{run_id}/events")
+def run_events(run_id: str, after: int = 0):
+    """Incremental: the view polls with the last seq it has, so a long run does
+    not re-ship its whole history every second."""
+    rs = RunStore()
+    try:
+        if rs.get(run_id) is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        return rs.events(run_id, after)
+    finally:
+        rs.close()
+
+
+@app.delete("/api/runs/{run_id}")
+def run_delete(run_id: str):
+    rs = RunStore()
+    try:
+        if not rs.delete(run_id):
+            raise HTTPException(status_code=404, detail="no such run")
+        return {"deleted": run_id}
+    finally:
+        rs.close()
 
 
 @app.get("/")
