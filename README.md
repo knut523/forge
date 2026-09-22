@@ -8,7 +8,11 @@ Independent by design. It shares no database, no auth and no container with the
 Prometheus platform; it borrows only ideas (and, later, styling). The one thing
 it must never do is act on a repo without approval — see *Two tokens* below.
 
-Status: **Phase 1 — the code index.** Nothing here talks to GitHub yet.
+Status: **Phase 1 — the code index, the wayfinder, and a UI.** The only GitHub
+access so far is read: listing an org and cloning. Nothing is ever pushed.
+
+UI: `/forge/` behind HTTP Basic, served as a static page by the API — no second
+Node process, which matters on a host that already OOMs.
 
 ## Why an index first
 
@@ -88,6 +92,62 @@ $R orphans                   # exported but unreferenced (dead-code candidates)
 Add `--json` for machine-readable output — that is how the engineer loop will
 consume it.
 
+## Wayfinder — what else does this change touch?
+
+Runs *before* a plan is written. The costliest mistake a repo-contributing
+engineer makes is reasoning inside one repo when the change spans several.
+
+Separate repos share no imports and no symbol ids, so the symbol graph cannot
+see the seam. Wayfinder works on evidence instead, and labels it:
+
+- **route** — a URL path in one repo extends a route declared in another. A
+  backend declares `/start` under a router mounted at `/api/v1/ace`; the
+  frontend writes the whole path. Matching is by suffix, and the leftover
+  prefix must itself appear in the declaring repo before a match is called
+  `high` — corroboration, not coincidence.
+- **shared-name** — the same name is exported, or called-but-unresolved,
+  elsewhere. A duplication and shared-contract hint, reported at low confidence.
+
+Everything carries file, line and a confidence. Nothing is asserted as fact: a
+wayfinder that guessed confidently would be worse than none, because it would
+be believed.
+
+Two filters keep it honest, both added after real false positives:
+
+- absolute filesystem paths (`/dev/null`, `/tmp/file`) are never treated as
+  routes — they match the shape perfectly and link repos that share nothing;
+- a one-segment path (`/test`, `/stream`) never couples two repos on its own.
+  It only counts when a multi-segment mount point corroborates it.
+
+Measured across four indexed repos — this platform's backend and frontend plus
+two unrelated open-source repos — wayfinder reports coupling **only** between
+the backend and frontend (177 route matches, 174 high), and none at all for the
+unrelated pair.
+
+```bash
+$R links                                        # who is coupled to whom
+$R --repo prom-backend impacts app/api/x.py --file
+$R --repo prom-backend impacts calculateTariff
+```
+
+## Many repos, and whole orgs
+
+The store is multi-repo from the ground up; every query takes `--repo`, and
+wayfinder searches across all of them.
+
+```bash
+$R org my-org                                   # list (read-only)
+$R index-org my-org --select api,web,shared     # a chosen few
+$R index-org my-org --all --limit 40            # or the whole org
+```
+
+Clones are shallow and single-branch, and the checkout is deleted after
+indexing unless `--keep` is passed. The read token comes from
+`$FORGE_READ_TOKEN`, is never logged, and is scrubbed out of the clone's remote
+URL so an abandoned checkout carries no credential. Without a token it still
+works against public repos at GitHub's 60/hour anonymous limit. `--limit` is a
+deliberate speed bump: cloning an entire org is a lot of disk and time.
+
 ## Two tokens
 
 A fixed convention, enforced rather than remembered:
@@ -99,8 +159,10 @@ A fixed convention, enforced rather than remembered:
 ## Roadmap
 
 1. **Code index** ← done
-2. Capture / spec / plan, with the `plan-to-pr` gates (freshness, anti-duplication,
-   parallel-PR) as code rather than prose
+2. **Wayfinder + multi-repo/org indexing + UI** ← done
+3. Capture / spec / plan, with the `plan-to-pr` gates (freshness, anti-duplication,
+   parallel-PR) as code rather than prose — wayfinder runs first, so the plan
+   knows about every repo it touches
 3. Build on a branch, grounded in the index
 4. Visual verification — Playwright screenshots of every changed state
 5. Human review UI — diff, screenshots, blast radius, approve / request changes

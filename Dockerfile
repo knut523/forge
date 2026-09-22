@@ -15,4 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY forge ./forge
 ENV PYTHONUNBUFFERED=1 FORGE_DATA=/data
 VOLUME /data
-CMD ["python", "-m", "forge.cli", "--help"]
+EXPOSE 8910
+CMD ["uvicorn", "forge.api.app:app", "--host", "0.0.0.0", "--port", "8910"]

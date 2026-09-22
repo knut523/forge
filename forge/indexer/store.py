@@ -90,6 +90,20 @@ CREATE INDEX IF NOT EXISTS ix_refs_src  ON refs(src_symbol_id);
 CREATE INDEX IF NOT EXISTS ix_refs_name ON refs(repo_id, name);
 CREATE INDEX IF NOT EXISTS ix_refs_file ON refs(file_id);
 
+-- URL paths seen in source. The cross-repo seam: a symbol graph cannot connect
+-- a frontend fetch to the backend route it calls, but the string can.
+CREATE TABLE IF NOT EXISTS literals (
+    id      INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    value   TEXT NOT NULL,
+    line    INTEGER,
+    kind    TEXT NOT NULL DEFAULT 'path'
+);
+CREATE INDEX IF NOT EXISTS ix_lit_value ON literals(value);
+CREATE INDEX IF NOT EXISTS ix_lit_repo  ON literals(repo_id);
+CREATE INDEX IF NOT EXISTS ix_lit_file  ON literals(file_id);
+
 -- Not contentless: a contentless fts5 table rejects DELETE, and re-indexing a
 -- repo has to remove that repo's old rows without touching any other repo's.
 -- The duplicated text costs a few MB and buys a simple, correct write path.
@@ -99,8 +113,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts
 
 
 class Store:
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, readonly: bool = False):
+        """`readonly` opens the index without touching it at all.
+
+        The API serves queries this way, off a read-only mount: a query service
+        has no business creating schema, and a WAL pragma against a read-only
+        file fails outright. Writers (the indexer) use the default path.
+        """
         self.path = Path(db_path)
+        self.readonly = readonly
+        if readonly:
+            if not self.path.exists():
+                raise ValueError(f"no index at {self.path} — index a repo first")
+            self.db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+            self.db.row_factory = sqlite3.Row
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(self.path))
         self.db.row_factory = sqlite3.Row
@@ -131,7 +158,8 @@ class Store:
         self.db.commit()
 
     def close(self) -> None:
-        self.db.commit()
+        if not self.readonly:
+            self.db.commit()
         self.db.close()
 
     # ─── write path ─────────────────────────────────────────────────────────
@@ -204,6 +232,13 @@ class Store:
                 "INSERT INTO refs (repo_id, file_id, src_qual, name, full, line, kind) "
                 "VALUES (?,?,?,?,?,?,?)", rows)
 
+    def add_literals(self, repo_id: int, file_id: int, literals: Iterable[Any]) -> None:
+        rows = [(repo_id, file_id, x.value, x.line, x.kind) for x in literals]
+        if rows:
+            self.db.executemany(
+                "INSERT INTO literals (repo_id, file_id, value, line, kind) "
+                "VALUES (?,?,?,?,?)", rows)
+
     def commit(self) -> None:
         self.db.commit()
 
@@ -218,5 +253,22 @@ class Store:
         q("UPDATE repos SET indexed_at=?, file_count=?, symbol_count=?, ref_count=?,"
           " resolved_pct=? WHERE id=?", (indexed_at, files, syms, refs, pct, repo_id))
         self.db.commit()
+        self._seal()
         return {"files": files, "symbols": syms, "refs": refs,
                 "resolved": res, "resolved_pct": pct}
+
+    def _seal(self) -> None:
+        """Leave the index as one self-contained, read-only-friendly file.
+
+        WAL is the right mode *while* indexing, but it leaves -wal/-shm side
+        files and a header that makes a read-only open fail: SQLite must create
+        the -shm file even to read, which a read-only mount forbids. Checkpoint
+        and drop back to a rollback journal so the API — and anyone copying the
+        index around — gets a single file that just opens.
+        """
+        try:
+            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self.db.execute("PRAGMA journal_mode=DELETE")
+            self.db.commit()
+        except sqlite3.Error:
+            pass   # a still-WAL index is usable by writers; never fail a run here

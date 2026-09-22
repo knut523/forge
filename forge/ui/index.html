@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forge — code index</title>
+<style>
+  :root{
+    --bg:#0e1013; --panel:#161a20; --panel2:#1c222a; --line:#272e38;
+    --ink:#e6e9ee; --ink2:#9aa4b2; --ink3:#6b7684;
+    --accent:#f0883e;
+    --hi:#3fb950; --med:#d29922; --lo:#8b949e;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;
+         border-bottom:1px solid var(--line);background:var(--panel);
+         position:sticky;top:0;z-index:10}
+  .logo{width:26px;height:26px;border-radius:7px;flex:none;
+        background:linear-gradient(135deg,var(--accent),#b85c1d);
+        display:grid;place-items:center;font-weight:700;color:#1a1005;font-size:15px}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
+  .sub{color:var(--ink3);font-size:12px}
+  nav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+  nav button{background:transparent;border:1px solid transparent;color:var(--ink2);
+    padding:6px 13px;border-radius:7px;cursor:pointer;font-size:13px;font-family:inherit}
+  nav button:hover{color:var(--ink);background:var(--panel2)}
+  nav button.on{background:var(--panel2);color:var(--ink);border-color:var(--line)}
+  main{padding:20px;max-width:1180px;margin:0 auto}
+  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px}
+  .card h3{margin:0 0 10px;font-size:14px;font-weight:600}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:13px}
+  .kv span:first-child{color:var(--ink3)}
+  .kv span:last-child{font-family:var(--mono);font-size:12px}
+  .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  input,select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+    padding:9px 12px;border-radius:8px;font:inherit;font-size:13px}
+  input{flex:1;min-width:210px}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  button.go{background:var(--accent);color:#1a1005;border:none;padding:9px 17px;
+    border-radius:8px;font-weight:600;cursor:pointer;font-family:inherit;font-size:13px}
+  button.go:hover{filter:brightness(1.1)}
+  .list{background:var(--panel);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .item{padding:11px 15px;border-bottom:1px solid var(--line);cursor:pointer;
+        display:flex;gap:11px;align-items:baseline}
+  .item:last-child{border-bottom:none}
+  .item:hover{background:var(--panel2)}
+  .kind{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink3);
+        border:1px solid var(--line);border-radius:5px;padding:2px 6px;flex:none}
+  .qn{font-family:var(--mono);font-size:13px;color:var(--ink)}
+  .loc{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--ink3);
+       text-align:right;flex:none}
+  .sig{font-family:var(--mono);font-size:11.5px;color:var(--ink2);
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{font-size:10px;font-weight:700;letter-spacing:.5px;padding:2px 7px;
+         border-radius:20px;text-transform:uppercase}
+  .b-high{background:rgba(63,185,80,.15);color:var(--hi);border:1px solid rgba(63,185,80,.3)}
+  .b-medium{background:rgba(210,153,34,.15);color:var(--med);border:1px solid rgba(210,153,34,.3)}
+  .b-low{background:rgba(139,148,158,.13);color:var(--lo);border:1px solid rgba(139,148,158,.28)}
+  .ev{font-family:var(--mono);font-size:12px;padding:8px 14px;border-bottom:1px solid var(--line)}
+  .ev:last-child{border-bottom:none}
+  .ev .p{color:var(--ink2)}
+  .ev .arrow{color:var(--accent)}
+  .muted{color:var(--ink3)}
+  .note{background:rgba(240,136,62,.08);border:1px solid rgba(240,136,62,.25);
+        color:#e8b48a;padding:10px 13px;border-radius:9px;font-size:13px;margin-top:12px}
+  .sec{margin:22px 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.8px;
+       color:var(--ink3);font-weight:600}
+  .link{display:flex;align-items:center;gap:10px;padding:10px 15px;
+        border-bottom:1px solid var(--line);font-size:13px}
+  .link:last-child{border-bottom:none}
+  .link code{font-family:var(--mono);color:var(--ink)}
+  .bar{height:5px;border-radius:3px;background:var(--accent);flex:none}
+  .empty{padding:30px;text-align:center;color:var(--ink3)}
+  .spin{padding:22px;text-align:center;color:var(--ink3);font-size:13px}
+  .hint{font-size:12px;color:var(--ink3);margin-top:-6px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">f</div>
+  <div>
+    <h1>forge</h1>
+    <div class="sub" id="hdr">code index &amp; cross-repo wayfinder</div>
+  </div>
+  <nav>
+    <button data-tab="repos" class="on">Repos</button>
+    <button data-tab="explore">Explore</button>
+    <button data-tab="wayfinder">Wayfinder</button>
+  </nav>
+</header>
+<main>
+  <div id="repos"></div>
+  <div id="explore" hidden></div>
+  <div id="wayfinder" hidden></div>
+</main>
+
+<script>
+const API = new URL('api/', document.baseURI).href.replace(/\/+$/, '');
+const $  = (s,r=document)=>r.querySelector(s);
+const el = (h)=>{const d=document.createElement('div');d.innerHTML=h.trim();return d.firstElementChild;};
+const esc= (s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const num= (n)=>Number(n??0).toLocaleString();
+
+async function get(p, q={}){
+  const u = new URL(API+p, location.href);
+  Object.entries(q).forEach(([k,v])=>{ if(v!=null && v!=='') u.searchParams.set(k,v); });
+  const r = await fetch(u);
+  if(!r.ok){ throw new Error((await r.json().catch(()=>({detail:r.statusText}))).detail); }
+  return r.json();
+}
+
+let REPOS = [];
+
+/* ── tabs ─────────────────────────────────────────────────────────── */
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
+  ['repos','explore','wayfinder'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
+  if(b.dataset.tab==='explore') $('#q')?.focus();
+});
+
+/* ── repos ────────────────────────────────────────────────────────── */
+async function loadRepos(){
+  const box = $('#repos');
+  box.innerHTML = '<div class="spin">loading index…</div>';
+  try{
+    REPOS = await get('/repos');
+    if(!REPOS.length){ box.innerHTML='<div class="empty">Nothing indexed yet.</div>'; return; }
+    $('#hdr').textContent = REPOS.length+' repo'+(REPOS.length>1?'s':'')+' indexed';
+    box.innerHTML = '<div class="sec">Indexed repositories</div><div class="grid" id="rg"></div>';
+    REPOS.forEach(r=>$('#rg').appendChild(el(`
+      <div class="card">
+        <h3>${esc(r.name)}</h3>
+        <div class="kv"><span>files</span><span>${num(r.file_count)}</span></div>
+        <div class="kv"><span>symbols</span><span>${num(r.symbol_count)}</span></div>
+        <div class="kv"><span>edges</span><span>${num(r.ref_count)}</span></div>
+        <div class="kv"><span>resolved</span><span>${r.resolved_pct}%</span></div>
+        <div class="kv"><span>branch</span><span>${esc(r.branch||'—')}</span></div>
+        <div class="kv"><span>indexed</span><span>${esc((r.indexed_at||'').replace('T',' ').replace('+00:00',''))}</span></div>
+      </div>`)));
+
+    const links = await get('/links');
+    box.appendChild(el('<div class="sec">Cross-repo coupling &mdash; shared URL routes</div>'));
+    if(!links.length){
+      box.appendChild(el('<div class="list"><div class="empty">No route coupling found between the indexed repos.</div></div>'));
+      return;
+    }
+    const max = Math.max(...links.map(l=>l.routes));
+    const list = el('<div class="list"></div>');
+    links.forEach(l=>list.appendChild(el(`
+      <div class="link">
+        <code>${esc(l.from)}</code> <span class="muted">&rarr;</span> <code>${esc(l.to)}</code>
+        <div class="bar" style="width:${Math.round(110*l.routes/max)}px"></div>
+        <span class="muted">${l.routes} matching paths</span>
+        <span class="badge b-high" style="margin-left:auto">${l.high} high</span>
+      </div>`)));
+    box.appendChild(list);
+  }catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ── explore ──────────────────────────────────────────────────────── */
+function repoOptions(all='every repo'){
+  return `<option value="">${all}</option>` +
+    REPOS.map(r=>`<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');
+}
+
+function exploreShell(){
+  $('#explore').innerHTML = `
+    <div class="row">
+      <input id="q" placeholder="search symbols — name, signature or doc…" autocomplete="off">
+      <select id="qrepo">${repoOptions()}</select>
+      <button class="go" id="qgo">Search</button>
+    </div>
+    <div class="hint">Click a result to see who calls it and what it reaches.</div>
+    <div id="qres"></div>
+    <div id="detail"></div>`;
+  $('#qgo').onclick = runSearch;
+  $('#q').onkeydown = e=>{ if(e.key==='Enter') runSearch(); };
+}
+
+async function runSearch(){
+  const q = $('#q').value.trim(); if(!q) return;
+  const res = $('#qres'); $('#detail').innerHTML='';
+  res.innerHTML = '<div class="spin">searching…</div>';
+  try{
+    const rows = await get('/search', {q, repo:$('#qrepo').value, limit:30});
+    if(!rows.length){ res.innerHTML='<div class="list"><div class="empty">No match.</div></div>'; return; }
+    const list = el('<div class="list"></div>');
+    rows.forEach(r=>{
+      const it = el(`<div class="item">
+          <span class="kind">${esc(r.kind)}</span>
+          <div style="min-width:0;flex:1">
+            <div class="qn">${esc(r.qualname)}</div>
+            <div class="sig">${esc(r.signature||'')}</div>
+          </div>
+          <div class="loc">${esc(r.path)}<br>:${r.start_line}</div>
+        </div>`);
+      it.onclick = ()=>showSymbol(r);
+      list.appendChild(it);
+    });
+    res.innerHTML=''; res.appendChild(list);
+  }catch(e){ res.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+async function showSymbol(sym){
+  const d = $('#detail');
+  d.innerHTML = '<div class="spin">reading graph…</div>';
+  try{
+    const [cr, ce, bl] = await Promise.all([
+      get('/callers',{id:sym.id}), get('/callees',{id:sym.id}), get('/blast',{id:sym.id,depth:2})
+    ]);
+    d.innerHTML = `<div class="sec">${esc(sym.qualname)} &mdash; ${esc(sym.path)}:${sym.start_line}</div>`;
+    const wrap = el('<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))"></div>');
+
+    const mk = (title, rows, fmt) => {
+      const c = el(`<div class="card"><h3>${title} <span class="muted">(${rows.length})</span></h3></div>`);
+      if(!rows.length) c.appendChild(el('<div class="muted">none</div>'));
+      rows.slice(0,25).forEach(r=>c.appendChild(el(`<div class="ev" style="border:none;padding:5px 0">${fmt(r)}</div>`)));
+      return c;
+    };
+    wrap.appendChild(mk('Called by', cr,
+      r=>`<span class="p">${esc(r.caller||'(module level)')}</span><br><span class="muted">${esc(r.path)}:${r.line}</span>`));
+    wrap.appendChild(mk('Calls', ce,
+      r=>`<span class="p">${esc(r.qualname)}</span><br><span class="muted">${esc(r.path)}:${r.start_line}</span>`));
+    const flat = bl.layers.flat();
+    wrap.appendChild(mk('Blast radius (depth 2)', flat,
+      r=>`<span class="p">${esc(r.qualname)}</span><br><span class="muted">${esc(r.path)}:${r.start_line}</span>`));
+    d.appendChild(wrap);
+    if(bl.truncated) d.appendChild(el('<div class="note">Blast radius truncated — this is a hub symbol.</div>'));
+  }catch(e){ d.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ── wayfinder ────────────────────────────────────────────────────── */
+function wayShell(){
+  $('#wayfinder').innerHTML = `
+    <div class="row">
+      <select id="wrepo">${REPOS.map(r=>`<option>${esc(r.name)}</option>`).join('')}</select>
+      <input id="wtarget" placeholder="symbol name, or a file path" autocomplete="off">
+      <select id="wmode"><option value="symbol">symbol</option><option value="path">file</option></select>
+      <button class="go" id="wgo">Check impact</button>
+    </div>
+    <div class="hint">Run this before planning a change: it looks for impact in every other indexed repo, not just this one.</div>
+    <div id="wres"></div>`;
+  $('#wgo').onclick = runWay;
+  $('#wtarget').onkeydown = e=>{ if(e.key==='Enter') runWay(); };
+}
+
+async function runWay(){
+  const t = $('#wtarget').value.trim(); if(!t) return;
+  const box = $('#wres');
+  box.innerHTML = '<div class="spin">tracing…</div>';
+  try{
+    const mode = $('#wmode').value;
+    const rep = await get('/impacts', {repo:$('#wrepo').value, [mode]:t});
+    const tg = rep.target;
+    box.innerHTML = '';
+    box.appendChild(el(`<div class="card">
+        <h3>${esc(tg.symbol||tg.path)}</h3>
+        <div class="kv"><span>repo</span><span>${esc(tg.repo)}</span></div>
+        <div class="kv"><span>symbols in scope</span><span>${tg.match_count}</span></div>
+        <div class="kv"><span>callers inside this repo</span><span>${rep.local_callers.length}</span></div>
+        <div class="kv"><span>repos searched</span><span>${esc(rep.indexed_repos.join(', '))}</span></div>
+      </div>`));
+
+    box.appendChild(el('<div class="sec">Impact outside this repo</div>'));
+    if(!rep.cross_repo.length){
+      box.appendChild(el('<div class="list"><div class="empty">No cross-repo evidence found.</div></div>'));
+    }
+    rep.cross_repo.forEach(c=>{
+      const card = el(`<div class="list" style="margin-bottom:12px">
+        <div class="link" style="background:var(--panel2)">
+          <code>${esc(c.repo)}</code>
+          <span class="badge b-${c.confidence}" style="margin-left:auto">${c.confidence}</span>
+        </div></div>`);
+      Object.entries(c.signals).forEach(([sig, items])=>{
+        card.appendChild(el(`<div class="ev muted" style="background:rgba(255,255,255,.02)">via ${esc(sig)}</div>`));
+        items.forEach(i=>{
+          const body = sig==='route'
+            ? `<span class="p">${esc(i.their_path)}</span> <span class="arrow">&rarr;</span> <span class="p">${esc(i.our_path)}</span>`
+            : `<span class="p">${esc(i.name)}</span> <span class="muted">— ${esc(i.what)}</span>`;
+          card.appendChild(el(`<div class="ev">
+              <span class="badge b-${i.confidence}">${i.confidence}</span>
+              ${body}<br><span class="muted">${esc(i.file)}:${i.line}</span>
+            </div>`));
+        });
+      });
+      box.appendChild(card);
+    });
+    rep.notes.forEach(n=>box.appendChild(el(`<div class="note">${esc(n)}</div>`)));
+  }catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ── boot ─────────────────────────────────────────────────────────── */
+(async ()=>{ await loadRepos(); exploreShell(); wayShell(); })();
+</script>
+</body>
+</html>

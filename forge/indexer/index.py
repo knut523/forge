@@ -113,6 +113,7 @@ def index_repo(root: str | Path, name: str | None = None,
         store.add_symbols(repo_id, fid, parsed.symbols)
         store.add_imports(repo_id, fid, parsed.imports)
         store.add_refs(repo_id, fid, parsed.refs)
+        store.add_literals(repo_id, fid, parsed.literals)
 
         if progress and n % 250 == 0:
             progress(f"  parsed {n}/{len(paths)}")

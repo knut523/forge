@@ -11,6 +11,7 @@ What we pull out, and why each earns its place:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from tree_sitter_language_pack import get_parser
@@ -20,6 +21,18 @@ from .languages import GRAMMAR
 _PARSERS: dict[str, object] = {}
 
 MAX_SIG = 400
+
+# A URL path: leading slash, at least two characters, and only the characters
+# routes are actually built from. Deliberately strict — loosening it turns every
+# filesystem path, regex and format string in the tree into a false seam.
+_PATH_RE = re.compile(r"^/[A-Za-z0-9_\-./{}:$]{2,180}$")
+
+# Absolute filesystem paths match the route shape exactly, and every codebase is
+# full of them. Left in, "/dev/null" links two repos that share nothing.
+_FS_ROOTS = frozenset({
+    "dev", "proc", "sys", "tmp", "usr", "etc", "var", "bin", "sbin", "lib",
+    "lib64", "mnt", "media", "srv", "home", "root", "opt", "boot", "run",
+})
 
 
 def _parser(lang: str):
@@ -63,12 +76,27 @@ class Ref:
 
 
 @dataclass
+class Literal:
+    """A string constant worth remembering — currently URL paths.
+
+    These are the seam between repos. A frontend that fetches
+    "/api/v1/ace/start" and a backend that declares "/start" under a router
+    prefixed "/api/v1/ace" share no symbol and no import, so the symbol graph
+    cannot connect them. The string can.
+    """
+    value: str
+    line: int
+    kind: str = "path"
+
+
+@dataclass
 class ParsedFile:
     lang: str
     loc: int
     symbols: list[Symbol] = field(default_factory=list)
     imports: list[Import] = field(default_factory=list)
     refs: list[Ref] = field(default_factory=list)
+    literals: list[Literal] = field(default_factory=list)
     error: str | None = None
 
 
@@ -268,6 +296,7 @@ def parse_source(src: bytes, lang: str) -> ParsedFile:
     defs = cfg["defs"]
     import_types = cfg["imports"]
     call_types = cfg["calls"]
+    string_types = cfg["string_types"]
     is_py = lang == "python"
 
     # (node, scope) — scope carries the enclosing qualname parts, so a symbol's
@@ -319,6 +348,23 @@ def parse_source(src: bytes, lang: str) -> ParsedFile:
             c = _py_const(node, scope)
             if c is not None:
                 out.symbols.append(c)
+
+        elif ntype in string_types:
+            raw = _text(node)
+            val = raw.strip("\"'`")
+            # `${id}` and `{id}` are the same route slot; normalise so a
+            # template literal matches the server's declared parameter.
+            norm = re.sub(r"\$\{[^}]*\}", "{}", val)
+            norm = re.sub(r"\{[^}]*\}", "{}", norm)
+            # A client almost always writes `${API_URL}/api/v1/...`, so the
+            # interesting path is preceded by a base-URL placeholder. Drop it,
+            # or every real call site fails the leading-slash test.
+            while norm.startswith("{}"):
+                norm = norm[2:]
+            if (_PATH_RE.match(norm) and "//" not in norm
+                    and norm.split("/")[1].lower() not in _FS_ROOTS):
+                out.literals.append(Literal(norm.rstrip("/") or "/",
+                                            node.start_point[0] + 1))
 
         elif not is_py and ntype in ("jsx_opening_element", "jsx_self_closing_element"):
             nm = node.child_by_field_name("name")
