@@ -156,6 +156,44 @@ A fixed convention, enforced rather than remembered:
 - a **write** token — push a branch and open a PR. Unlocked *only* after a human
   approves that specific run, and used for nothing else.
 
+They are separate named slots (`github_read_token`, `github_write_token`), not a
+free-form string a caller can misspell into the wrong one.
+
+**Verify checks the split.** `POST /api/settings/{key}/verify` asks GitHub who
+the token is and reads back its scopes. A token filed as *read* that carries
+`repo`, `workflow` or any other write scope is flagged immediately — a safety
+rule nobody checks is a hope, not a rule. Fine-grained tokens don't expose
+permissions this way; forge says so plainly rather than implying it passed.
+
+## Credentials and models
+
+Set through the UI's **Settings** tab, or the API. Values go in and never come
+back out: every response carries the provider, the last four characters and when
+it was set, never the secret.
+
+Storage is a **separate SQLite file** from the index, for two reasons: the index
+is disposable and gets rebuilt, and it is mounted read-only into the API
+container — a property worth keeping. Only the config store is writable.
+
+Secrets are AES-GCM encrypted at rest, with the key in `$FORGE_KEK` or a `0600`
+file beside the database. Be clear-eyed about what that buys: it protects a
+leaked database file, a backup or a careless `cat` — not someone who already has
+root on the host.
+
+Models are registered against a credential and, optionally, a **role**
+(`engineer`, `council`, `judge`, `fast`) so a run can ask for a purpose rather
+than a name. `List models` asks the provider what it actually offers, so an id
+is picked rather than typed, and `Test` proves the credential works *and* that
+the specific model id exists in that provider's list — reachability alone is not
+the same answer.
+
+```
+PUT    /api/settings              {key, value, provider}
+POST   /api/settings/{key}/verify
+GET    /api/models · POST /api/models · POST /api/models/{name}/test
+GET    /api/providers/{provider}/models
+```
+
 ## Roadmap
 
 1. **Code index** ← done

@@ -125,6 +125,11 @@ def index_repo(root: str | Path, name: str | None = None,
     resolve(store, repo_id)
 
     stats = store.finalize(repo_id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    if stats.get("journal") != "delete" and progress:
+        # not fatal for writers, but the API serves off a read-only mount and
+        # a WAL-mode file cannot be opened there at all
+        progress(f"WARNING: index left in {stats.get('journal')} mode — a "
+                 f"read-only reader (the API) will not be able to open it")
     stats.update({"repo": name, "repo_id": repo_id, "branch": branch,
                   "head": head, "parse_errors": parse_errors,
                   "skipped_generated": skipped_generated})

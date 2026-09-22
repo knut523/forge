@@ -91,12 +91,14 @@
     <button data-tab="repos" class="on">Repos</button>
     <button data-tab="explore">Explore</button>
     <button data-tab="wayfinder">Wayfinder</button>
+    <button data-tab="settings">Settings</button>
   </nav>
 </header>
 <main>
   <div id="repos"></div>
   <div id="explore" hidden></div>
   <div id="wayfinder" hidden></div>
+  <div id="settings" hidden></div>
 </main>
 
 <script>
@@ -119,8 +121,9 @@ let REPOS = [];
 /* ── tabs ─────────────────────────────────────────────────────────── */
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
-  ['repos','explore','wayfinder'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
+  ['repos','explore','wayfinder','settings'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
   if(b.dataset.tab==='explore') $('#q')?.focus();
+  if(b.dataset.tab==='settings') loadSettings();
 });
 
 /* ── repos ────────────────────────────────────────────────────────── */
@@ -292,6 +295,164 @@ async function runWay(){
     });
     rep.notes.forEach(n=>box.appendChild(el(`<div class="note">${esc(n)}</div>`)));
   }catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ── settings: credentials + models ───────────────────────────────── */
+const PROVIDERS = ['github','anthropic','openai','openai-compatible','ollama'];
+const ROLES = ['engineer','council','judge','fast'];
+
+async function send(method, path, body){
+  const r = await fetch(new URL(API+path, location.href), {
+    method, headers:{'Content-Type':'application/json'},
+    body: body?JSON.stringify(body):undefined });
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+
+function verdict(res){
+  const bits = [];
+  if(res.ok) bits.push(`<span class="badge b-high">ok</span> ${esc(res.detail||'')}`);
+  else bits.push(`<span class="badge b-low">failed</span> ${esc(res.detail||'')}`);
+  if(res.scopes?.length) bits.push(`<div class="muted" style="margin-top:5px">scopes: <code>${esc(res.scopes.join(', '))}</code></div>`);
+  (res.warnings||[]).forEach(w=>bits.push(`<div class="note">${esc(w)}</div>`));
+  return bits.join('');
+}
+
+async function loadSettings(){
+  const box = $('#settings');
+  box.innerHTML = '<div class="spin">loading…</div>';
+  try{
+    const [secrets, models] = await Promise.all([get('/settings'), get('/models')]);
+    box.innerHTML = '<div class="sec">Credentials</div>';
+    box.appendChild(el(`<div class="hint" style="margin-bottom:12px">
+      Stored encrypted (AES-GCM) in forge's own config database, never in the code index.
+      Values are write-only — once saved, only the last four characters are ever shown again.</div>`));
+
+    const grid = el('<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))"></div>');
+    secrets.forEach(s=>grid.appendChild(secretCard(s)));
+    box.appendChild(grid);
+
+    box.appendChild(el('<div class="sec">Add another key</div>'));
+    box.appendChild(el(`<div class="card">
+        <div class="row" style="margin:0">
+          <input id="nk" placeholder="key name, e.g. anthropic_api_key" style="min-width:200px">
+          <select id="np">${PROVIDERS.map(p=>`<option>${p}</option>`).join('')}</select>
+          <input id="nv" type="password" placeholder="value" style="min-width:200px">
+          <button class="go" id="nsave">Save</button>
+        </div></div>`));
+    $('#nsave').onclick = async ()=>{
+      const key=$('#nk').value.trim(), value=$('#nv').value;
+      if(!key||!value) return;
+      try{ await send('PUT','/settings',{key,value,provider:$('#np').value}); loadSettings(); }
+      catch(e){ alert(e.message); }
+    };
+
+    /* models */
+    box.appendChild(el('<div class="sec">Models</div>'));
+    box.appendChild(el(`<div class="hint" style="margin-bottom:12px">
+      Registered models the engineer loop can be pointed at. A role lets a run pick
+      by purpose rather than by name.</div>`));
+    const ml = el('<div class="list"></div>');
+    if(!models.length) ml.appendChild(el('<div class="empty">No models registered yet.</div>'));
+    models.forEach(m=>{
+      const row = el(`<div class="item" style="cursor:default">
+          <span class="kind">${esc(m.role||'—')}</span>
+          <div style="min-width:0;flex:1">
+            <div class="qn">${esc(m.name)}</div>
+            <div class="sig">${esc(m.provider)} · ${esc(m.model_id)}${m.base_url?' · '+esc(m.base_url):''}</div>
+            <div class="mres muted" style="font-size:12px"></div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            ${m.credential_present?'':'<span class="badge b-medium">no key</span>'}
+            <button class="go tst" style="padding:5px 11px">Test</button>
+            <button class="go del" style="padding:5px 11px;background:#33383f;color:var(--ink2)">Remove</button>
+          </div>
+        </div>`);
+      row.querySelector('.tst').onclick = async ()=>{
+        const out = row.querySelector('.mres'); out.innerHTML='testing…';
+        try{ out.innerHTML = verdict(await send('POST',`/models/${encodeURIComponent(m.name)}/test`)); }
+        catch(e){ out.innerHTML = `<span class="badge b-low">failed</span> ${esc(e.message)}`; }
+      };
+      row.querySelector('.del').onclick = async ()=>{
+        if(!confirm(`Remove model ${m.name}?`)) return;
+        await send('DELETE',`/models/${encodeURIComponent(m.name)}`); loadSettings();
+      };
+      if(m.meta) row.querySelector('.mres').innerHTML = verdict(m.meta);
+      ml.appendChild(row);
+    });
+    box.appendChild(ml);
+
+    const keyOpts = secrets.filter(s=>s.set).map(s=>`<option>${esc(s.key)}</option>`).join('');
+    box.appendChild(el('<div class="sec">Register a model</div>'));
+    box.appendChild(el(`<div class="card">
+        <div class="row" style="margin:0">
+          <input id="mn" placeholder="name, e.g. opus-engineer" style="min-width:170px">
+          <select id="mp">${PROVIDERS.filter(p=>p!=='github').map(p=>`<option>${p}</option>`).join('')}</select>
+          <input id="mi" placeholder="model id" style="min-width:170px">
+          <select id="mk"><option value="">— credential —</option>${keyOpts}</select>
+          <select id="mr"><option value="">— role —</option>${ROLES.map(r=>`<option>${r}</option>`).join('')}</select>
+          <input id="mb" placeholder="base url (optional)" style="min-width:150px">
+          <button class="go" id="mfetch" style="background:#33383f;color:var(--ink2)">List models</button>
+          <button class="go" id="msave">Add</button>
+        </div>
+        <div id="mhint" class="hint" style="margin:10px 0 0"></div>
+      </div>`));
+    $('#mfetch').onclick = async ()=>{
+      const h=$('#mhint'); h.textContent='asking the provider…';
+      try{
+        const r = await get(`/providers/${$('#mp').value}/models`,
+                            {secret_key:$('#mk').value, base_url:$('#mb').value});
+        h.innerHTML = r.models.length
+          ? `${r.models.length} available — click one to fill: ` + r.models.slice(0,40)
+              .map(m=>`<a href="#" data-m="${esc(m)}"><code>${esc(m)}</code></a>`).join(' · ')
+          : 'provider returned no models';
+        h.querySelectorAll('a').forEach(a=>a.onclick=e=>{
+          e.preventDefault(); $('#mi').value = a.dataset.m; });
+      }catch(e){ h.textContent = e.message; }
+    };
+    $('#msave').onclick = async ()=>{
+      const b = {name:$('#mn').value.trim(), provider:$('#mp').value,
+                 model_id:$('#mi').value.trim(), base_url:$('#mb').value.trim()||null,
+                 secret_key:$('#mk').value||null, role:$('#mr').value||null};
+      if(!b.name||!b.model_id){ alert('name and model id are required'); return; }
+      try{ await send('POST','/models',b); loadSettings(); }catch(e){ alert(e.message); }
+    };
+  }catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+function secretCard(s){
+  const c = el(`<div class="card">
+      <h3>${esc(s.key)} ${s.set?'<span class="badge b-high">set</span>':'<span class="badge b-low">not set</span>'}</h3>
+      <div class="muted" style="font-size:12.5px;margin-bottom:11px">${esc(s.label||'')}</div>
+      ${s.set?`<div class="kv"><span>value</span><span>${esc(s.hint||'')}</span></div>
+               <div class="kv"><span>updated</span><span>${esc((s.updated_at||'').replace('T',' ').replace('+00:00',''))}</span></div>`:''}
+      <div class="row" style="margin:11px 0 0">
+        <input class="val" type="password" placeholder="${s.set?'replace value…':'paste value…'}">
+        <button class="go save" style="padding:7px 13px">Save</button>
+        ${s.set?'<button class="go ver" style="padding:7px 13px;background:#33383f;color:var(--ink2)">Verify</button>':''}
+        ${s.set&&!s.wellknown?'<button class="go rm" style="padding:7px 13px;background:#33383f;color:var(--ink2)">Delete</button>':''}
+      </div>
+      <div class="res" style="margin-top:10px;font-size:12.5px"></div>
+    </div>`);
+  const res = c.querySelector('.res');
+  c.querySelector('.save').onclick = async ()=>{
+    const v = c.querySelector('.val').value;
+    if(!v) return;
+    try{ await send('PUT','/settings',{key:s.key, value:v, provider:s.provider}); loadSettings(); }
+    catch(e){ res.innerHTML = `<span class="badge b-low">failed</span> ${esc(e.message)}`; }
+  };
+  c.querySelector('.ver')?.addEventListener('click', async ()=>{
+    res.innerHTML = 'checking…';
+    try{ res.innerHTML = verdict(await send('POST',`/settings/${encodeURIComponent(s.key)}/verify`)); }
+    catch(e){ res.innerHTML = `<span class="badge b-low">failed</span> ${esc(e.message)}`; }
+  });
+  c.querySelector('.rm')?.addEventListener('click', async ()=>{
+    if(!confirm(`Delete ${s.key}?`)) return;
+    await send('DELETE',`/settings/${encodeURIComponent(s.key)}`); loadSettings();
+  });
+  if(s.meta) res.innerHTML = verdict(s.meta);
+  return c;
 }
 
 /* ── boot ─────────────────────────────────────────────────────────── */

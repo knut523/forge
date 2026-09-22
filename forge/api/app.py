@@ -11,7 +11,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
+from ..config import providers as P
+from ..config.store import GITHUB_READ, GITHUB_WRITE, ConfigStore
 from ..indexer import query as Q
 from ..indexer import wayfinder as W
 from ..indexer.store import Store
@@ -107,6 +110,156 @@ def impacts(repo: str, symbol: str | None = None, path: str | None = None):
     if not symbol and not path:
         raise HTTPException(status_code=400, detail="pass symbol or path")
     return _call(W.impacts, repo, symbol, path)
+
+
+# ─── credentials ────────────────────────────────────────────────────────────
+# Values go in and are never handed back out: every response describes a secret
+# (provider, last four characters, when it was set) but never reveals it.
+
+class SecretIn(BaseModel):
+    key: str
+    value: str
+    label: str | None = None
+    provider: str | None = None
+
+
+class ModelIn(BaseModel):
+    name: str
+    provider: str
+    model_id: str
+    base_url: str | None = None
+    secret_key: str | None = None
+    role: str | None = None
+
+
+def _cfg() -> ConfigStore:
+    try:
+        return ConfigStore()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"config store: {e}")
+
+
+@app.get("/api/settings")
+def settings_list():
+    c = _cfg()
+    try:
+        return c.list_secrets()
+    finally:
+        c.close()
+
+
+@app.put("/api/settings")
+def settings_put(body: SecretIn):
+    c = _cfg()
+    try:
+        return c.set_secret(body.key.strip(), body.value,
+                            body.label, body.provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        c.close()
+
+
+@app.delete("/api/settings/{key}")
+def settings_delete(key: str):
+    c = _cfg()
+    try:
+        if not c.delete_secret(key):
+            raise HTTPException(status_code=404, detail="no such setting")
+        return {"deleted": key}
+    finally:
+        c.close()
+
+
+@app.post("/api/settings/{key}/verify")
+def settings_verify(key: str):
+    """Probe the credential, and record the verdict alongside it."""
+    c = _cfg()
+    try:
+        token = c.get_secret(key)
+        if token is None:
+            raise HTTPException(status_code=404, detail="not set")
+        desc = c.describe(key) or {}
+        provider = desc.get("provider") or ("github" if "github" in key else "")
+        expect = "write" if key == GITHUB_WRITE else "read"
+        res = P.verify(provider, token, expect=expect)
+        c.set_meta(key, {"verified_at": desc.get("updated_at"), **res})
+        return res
+    finally:
+        c.close()
+
+
+# ─── models ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/models")
+def models_list():
+    c = _cfg()
+    try:
+        return c.list_models()
+    finally:
+        c.close()
+
+
+@app.post("/api/models")
+def models_add(body: ModelIn):
+    c = _cfg()
+    try:
+        if body.secret_key and c.get_secret(body.secret_key) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"no credential named {body.secret_key!r} — add the key first")
+        return c.add_model(body.name.strip(), body.provider, body.model_id.strip(),
+                           body.base_url, body.secret_key, body.role)
+    finally:
+        c.close()
+
+
+@app.delete("/api/models/{name}")
+def models_delete(name: str):
+    c = _cfg()
+    try:
+        if not c.delete_model(name):
+            raise HTTPException(status_code=404, detail="no such model")
+        return {"deleted": name}
+    finally:
+        c.close()
+
+
+@app.post("/api/models/{name}/test")
+def models_test(name: str):
+    c = _cfg()
+    try:
+        m = c.get_model(name)
+        if m is None:
+            raise HTTPException(status_code=404, detail="no such model")
+        token = c.get_secret(m["secret_key"]) if m["secret_key"] else None
+        res = P.verify(m["provider"], token, m["base_url"])
+        # reachability is not the same as "this model id exists" — say which
+        if res.get("ok") and res.get("models") is not None:
+            res["model_present"] = m["model_id"] in res["models"]
+            if not res["model_present"]:
+                res["warnings"] = list(res.get("warnings", [])) + [
+                    f"provider reachable, but {m['model_id']!r} is not in its "
+                    f"model list"]
+        c.set_model_meta(name, res)
+        return res
+    finally:
+        c.close()
+
+
+@app.get("/api/providers/{provider}/models")
+def provider_models(provider: str, secret_key: str | None = None,
+                    base_url: str | None = None):
+    """What this provider offers, so a model can be picked rather than typed."""
+    c = _cfg()
+    try:
+        token = c.get_secret(secret_key) if secret_key else None
+        res = P.verify(provider, token, base_url)
+        if not res.get("ok"):
+            raise HTTPException(status_code=400, detail=res.get("detail"))
+        return {"models": res.get("models", []), "detail": res.get("detail")}
+    finally:
+        c.close()
 
 
 @app.get("/")

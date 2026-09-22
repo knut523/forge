@@ -253,11 +253,11 @@ class Store:
         q("UPDATE repos SET indexed_at=?, file_count=?, symbol_count=?, ref_count=?,"
           " resolved_pct=? WHERE id=?", (indexed_at, files, syms, refs, pct, repo_id))
         self.db.commit()
-        self._seal()
+        journal = self._seal()
         return {"files": files, "symbols": syms, "refs": refs,
-                "resolved": res, "resolved_pct": pct}
+                "resolved": res, "resolved_pct": pct, "journal": journal}
 
-    def _seal(self) -> None:
+    def _seal(self) -> str:
         """Leave the index as one self-contained, read-only-friendly file.
 
         WAL is the right mode *while* indexing, but it leaves -wal/-shm side
@@ -265,10 +265,21 @@ class Store:
         the -shm file even to read, which a read-only mount forbids. Checkpoint
         and drop back to a rollback journal so the API — and anyone copying the
         index around — gets a single file that just opens.
+
+        Done on a fresh connection: the switch is refused while any other
+        connection holds the database, and — the part that bit — `PRAGMA
+        journal_mode` reports the mode still in force instead of raising, so a
+        refusal is silent. Hence the explicit read-back.
         """
+        self.db.commit()
+        self.db.close()
+        con = sqlite3.connect(str(self.path))
         try:
-            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            self.db.execute("PRAGMA journal_mode=DELETE")
-            self.db.commit()
-        except sqlite3.Error:
-            pass   # a still-WAL index is usable by writers; never fail a run here
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            mode = con.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+            con.commit()
+        finally:
+            con.close()
+        self.db = sqlite3.connect(str(self.path))
+        self.db.row_factory = sqlite3.Row
+        return mode
