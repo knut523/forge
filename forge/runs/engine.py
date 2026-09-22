@@ -18,8 +18,11 @@ import threading
 import traceback
 from pathlib import Path
 
-from ..config.store import ConfigStore
+from ..config.store import GITHUB_WRITE, ConfigStore
 from ..config import llm
+from ..config import providers
+from . import ship
+from .memory import (MemoryStore, harvest_conventions, remember_verify_problems)
 from ..indexer import query as Q
 from ..indexer import wayfinder as W
 from ..indexer.store import Store as IndexStore
@@ -52,7 +55,8 @@ def _pick_model(cfg: ConfigStore) -> tuple[dict | None, str | None, str]:
     return chosen, token, ""
 
 
-def _capture(rs: RunStore, rid: str, idx: IndexStore, repo: str) -> dict:
+def _capture(rs: RunStore, rid: str, idx: IndexStore, repo: str,
+             mem: MemoryStore, root=None) -> dict:
     rs.set_phase(rid, "capture")
     rs.emit(rid, "capture", "step", f"Reading the index for {repo}")
 
@@ -73,6 +77,17 @@ def _capture(rs: RunStore, rid: str, idx: IndexStore, repo: str) -> dict:
     rs.emit(rid, "capture", "finding", "Load-bearing symbols",
             [{"symbol": h["qualname"], "at": f"{h['path']}", "referenced": h["refs"]}
              for h in hot])
+
+    # The repo's own instructions to contributors outrank anything we infer.
+    names = harvest_conventions(mem, repo, root)
+    if names:
+        rs.emit(rid, "capture", "finding",
+                f"Read {len(names)} convention(s) from the repo's own docs", names)
+    known = mem.list(repo)
+    if known:
+        rs.emit(rid, "capture", "metric",
+                f"{len(known)} thing(s) already known about this repo",
+                [{"kind": m["kind"], "what": m["title"]} for m in known[:15]])
 
     orph = Q.orphans(idx, repo, 15)
     if orph:
@@ -130,7 +145,7 @@ def _impact(rs: RunStore, rid: str, idx: IndexStore, repo: str,
 
 
 def _plan(rs: RunStore, rid: str, cfg: ConfigStore, goal: str, repo: str,
-          cap: dict, imp: dict) -> dict:
+          cap: dict, imp: dict, recall: str = "") -> dict:
     rs.set_phase(rid, "plan")
     model, token, why = _pick_model(cfg)
 
@@ -148,7 +163,8 @@ def _plan(rs: RunStore, rid: str, cfg: ConfigStore, goal: str, repo: str,
             {"provider": model["provider"], "model": model["model_id"]})
     text, meta = llm.complete(
         model, token, PLAN_SYSTEM,
-        f"GOAL\n{goal}\n\nGROUNDED FACTS ABOUT THE REPOSITORY\n{facts}")
+        f"GOAL\n{goal}\n\nGROUNDED FACTS ABOUT THE REPOSITORY\n{facts}"
+        + (f"\n\n{recall}" if recall else ""))
     if text is None:
         rs.emit(rid, "plan", "error", "The model call failed", meta, level="error")
         return {"error": meta.get("error")}
@@ -228,7 +244,7 @@ def _extract_json(text: str) -> dict | None:
 
 
 def _build(rs: RunStore, rid: str, cfg: ConfigStore, idx: IndexStore, repo: str,
-           goal: str, plan_text: str, target: str | None) -> dict:
+           goal: str, plan_text: str, target: str | None, recall: str = "") -> dict:
     """Write the change into an isolated workspace. Never touches the source tree."""
     rs.set_phase(rid, "build")
     model, token, why = _pick_model(cfg)
@@ -276,7 +292,9 @@ def _build(rs: RunStore, rid: str, cfg: ConfigStore, idx: IndexStore, repo: str,
     ctx = "\n\n".join(f"--- FILE {f['path']} ---\n{f['content']}" for f in seen)
     text, meta = llm.complete(
         model, token, BUILD_SYSTEM,
-        f"GOAL\n{goal}\n\nPLAN\n{plan_text}\n\nCURRENT FILES\n{ctx or '(none supplied)'}",
+        f"GOAL\n{goal}\n\nPLAN\n{plan_text}"
+        + (f"\n\n{recall}" if recall else "")
+        + f"\n\nCURRENT FILES\n{ctx or '(none supplied)'}",
         max_tokens=24000)
     if text is None:
         rs.emit(rid, "build", "error", "The model call failed", meta, level="error")
@@ -395,6 +413,7 @@ def execute(run_id: str, index_db: str) -> None:
     """Run the pipeline. Never raises — a crash is recorded as a failed run."""
     rs = RunStore()
     cfg = ConfigStore()
+    mem = MemoryStore()
     idx = None
     try:
         run = rs.get(run_id)
@@ -404,11 +423,16 @@ def execute(run_id: str, index_db: str) -> None:
         rs.emit(run_id, None, "info", "Run started",
                 {"repo": repo, "goal": goal, "target": target})
         idx = IndexStore(index_db, readonly=True)
+        root = _repo_root(idx, repo)
 
-        cap = _capture(rs, run_id, idx, repo)
+        cap = _capture(rs, run_id, idx, repo, mem, root)
         imp = _impact(rs, run_id, idx, repo, target)
 
-        plan = _plan(rs, run_id, cfg, goal, repo, cap, imp)
+        # What we already know goes into BOTH prompts. Planning around a known
+        # gotcha is useless if the builder then walks straight into it.
+        recall = mem.for_prompt(repo)
+
+        plan = _plan(rs, run_id, cfg, goal, repo, cap, imp, recall)
         if plan.get("blocked"):
             return rs.finish(run_id, "blocked", reason=(
                 "Stopped at Plan: " + plan["blocked"]), next_action=(
@@ -419,7 +443,7 @@ def execute(run_id: str, index_db: str) -> None:
                              reason="The planning model call failed",
                              next_action="Check the model with Test in Settings.")
 
-        built = _build(rs, run_id, cfg, idx, repo, goal, plan["text"], target)
+        built = _build(rs, run_id, cfg, idx, repo, goal, plan["text"], target, recall)
         if built.get("blocked"):
             return rs.finish(run_id, "blocked",
                              reason="Stopped at Build: " + built["blocked"],
@@ -431,18 +455,37 @@ def execute(run_id: str, index_db: str) -> None:
                              next_action="Inspect the Build events — the raw model "
                                          "output is attached.")
 
-        _verify(rs, run_id, built)
+        verified = _verify(rs, run_id, built)
+        if verified.get("problems"):
+            # Remember the shape of the mistake so the next run is warned about
+            # it before it writes, not after.
+            remember_verify_problems(mem, repo, run_id, verified["problems"])
 
-        # Deliberately NOT "done": the work exists but no human has seen it and
-        # nothing has been pushed. Saying "done" here is what made the last run
-        # look finished when it had barely started.
-        rs.emit(run_id, None, "info", "Reached the end of the implemented phases",
-                {"built_in": built.get("workspace"),
-                 "not_built_yet": "Review (screenshots + diff), Approve, PR"})
-        rs.finish(run_id, "incomplete",
-                  reason="Built and checked, but Review, Approve and PR are not "
-                         "implemented yet — nothing has been shown to a human or pushed.",
-                  next_action="Inspect the written files in the Build phase below.")
+        reviewed = ship.review(rs, run_id, built, verified, root, imp)
+        if not reviewed.get("ok"):
+            return rs.finish(run_id, "incomplete",
+                             reason="Nothing was produced to review.",
+                             next_action="Check the Build phase output.")
+
+        origin = idx.db.execute("SELECT origin FROM repos WHERE name=?",
+                                (repo,)).fetchone()
+        origin = origin["origin"] if origin else None
+        rs.set_state(run_id, {"built": built, "reviewed": reviewed,
+                              "origin": origin})
+
+        # The run STOPS here. The PR phase is not reachable by falling through;
+        # it runs only from an explicit approve call, which is what makes
+        # "nothing reaches GitHub without a human" structural rather than a rule.
+        rs.set_phase(run_id, "approve")
+        rs.emit(run_id, "approve", "info", "Waiting for your decision",
+                {"files": len(reviewed["diffs"]),
+                 "additions": reviewed["additions"],
+                 "deletions": reviewed["deletions"],
+                 "github_target": origin or "none — this repo has no GitHub origin"})
+        rs.finish(run_id, "awaiting_approval",
+                  reason="Built, checked and diffed. Nothing has been pushed.",
+                  next_action="Review the diff below, then Approve to open a PR, "
+                              "or Reject to discard it.")
     except Exception as e:
         rs.emit(run_id, None, "error", f"Run failed: {type(e).__name__}",
                 {"error": str(e)[:400], "trace": traceback.format_exc()[-1200:]},
@@ -451,9 +494,75 @@ def execute(run_id: str, index_db: str) -> None:
     finally:
         if idx is not None:
             idx.close()
+        mem.close()
         cfg.close()
         rs.close()
 
 
 def start(run_id: str, index_db: str) -> None:
     threading.Thread(target=execute, args=(run_id, index_db), daemon=True).start()
+
+
+# ─── after the human decides ────────────────────────────────────────────────
+
+def ship_it(run_id: str) -> None:
+    """Open the PR. Reached only from an approve call — never by falling through.
+
+    This is the one place the WRITE token is read, and it is read after the
+    approval is already recorded.
+    """
+    rs = RunStore()
+    cfg = ConfigStore()
+    try:
+        run = rs.get(run_id)
+        state = rs.get_state(run_id)
+        built, reviewed = state.get("built"), state.get("reviewed")
+        origin = state.get("origin")
+        if not built or not reviewed:
+            return rs.finish(run_id, "failed",
+                             reason="Approved, but the reviewed change is gone.",
+                             next_action="Start the run again.")
+        if not origin:
+            return rs.finish(run_id, "blocked",
+                             reason=f"Approved, but {run['repo']!r} has no GitHub "
+                                    f"origin recorded, so there is nowhere to open "
+                                    f"a PR.",
+                             next_action="Index a repo cloned from GitHub, then "
+                                         "run again.")
+        token = cfg.get_secret(GITHUB_WRITE)
+        if not token:
+            return rs.finish(run_id, "blocked",
+                             reason="Approved, but no GitHub WRITE token is set. "
+                                    "Nothing was pushed.",
+                             next_action="Add the write token in Settings, then "
+                                         "approve again.")
+        # A write token that cannot write fails halfway through, leaving a
+        # branch and no PR. Check before touching anything.
+        v = providers.verify_github(token, expect="write")
+        if not v.get("ok"):
+            return rs.finish(run_id, "blocked",
+                             reason=f"The write token was rejected: {v.get('detail')}",
+                             next_action="Replace it in Settings and approve again.")
+        for w in v.get("warnings", []):
+            rs.emit(run_id, "pr", "warn", w, level="warn")
+
+        try:
+            pr = ship.open_pr(rs, run_id, run, built, reviewed, origin, token)
+        except Exception as e:
+            rs.emit(run_id, "pr", "error", "Opening the PR failed",
+                    {"error": str(e)[:600]}, level="error")
+            return rs.finish(run_id, "failed", error=str(e)[:200],
+                             reason="The PR was not opened.",
+                             next_action="Check the PR phase events.")
+        rs.set_pr(run_id, pr["url"])
+        rs.finish(run_id, "complete",
+                  reason=f"PR #{pr['number']} opened against {pr['base']}, ready "
+                         f"for review.",
+                  next_action=pr["url"])
+    finally:
+        cfg.close()
+        rs.close()
+
+
+def approve(run_id: str) -> None:
+    threading.Thread(target=ship_it, args=(run_id,), daemon=True).start()

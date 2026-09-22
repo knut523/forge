@@ -31,7 +31,8 @@ PHASES = [
     ("approve", "Approve",  "A human decides — nothing reaches GitHub before this"),
     ("pr",      "PR",       "Push the branch and open the pull request"),
 ]
-IMPLEMENTED = {"capture", "impact", "plan", "build", "verify"}
+IMPLEMENTED = {"capture", "impact", "plan", "build", "verify", "review",
+               "approve", "pr"}
 
 # Terminal states, chosen so none of them can be read as "the goal was reached"
 # when it wasn't. A run that merely ran out of implemented phases is NOT done.
@@ -51,6 +52,8 @@ CREATE TABLE IF NOT EXISTS runs (
     status     TEXT NOT NULL,
     phase      TEXT,
     model      TEXT,
+    state      TEXT,
+    pr_url     TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     finished_at TEXT,
@@ -93,9 +96,26 @@ class RunStore:
     def _migrate(self) -> None:
         """Add columns introduced after the first runs were recorded."""
         have = {r["name"] for r in self.db.execute("PRAGMA table_info(runs)")}
-        for col in ("stopped_reason", "next_action"):
+        for col in ("stopped_reason", "next_action", "state", "pr_url"):
             if col not in have:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        self.db.commit()
+
+    # `state` carries what a later approval needs (the workspace, the diff, the
+    # GitHub target) so the PR step does not have to re-derive any of it — and
+    # so approving cannot quietly act on a different change than the one shown.
+    def set_state(self, run_id: str, state: dict) -> None:
+        self.db.execute("UPDATE runs SET state=?, updated_at=? WHERE id=?",
+                        (json.dumps(state, default=str), _now(), run_id))
+        self.db.commit()
+
+    def get_state(self, run_id: str) -> dict:
+        r = self.db.execute("SELECT state FROM runs WHERE id=?", (run_id,)).fetchone()
+        return json.loads(r["state"]) if r and r["state"] else {}
+
+    def set_pr(self, run_id: str, url: str) -> None:
+        self.db.execute("UPDATE runs SET pr_url=?, updated_at=? WHERE id=?",
+                        (url, _now(), run_id))
         self.db.commit()
 
     def close(self) -> None:

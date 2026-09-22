@@ -20,6 +20,7 @@ from ..indexer import wayfinder as W
 from ..indexer.store import Store
 from ..indexer import prs as PRs
 from ..runs import engine as RunEngine
+from ..runs.memory import KINDS, MemoryStore, remember_rejection
 from ..runs.store import IMPLEMENTED, PHASES, RunStore
 
 DB = os.environ.get("FORGE_DB", "/data/forge.db")
@@ -345,6 +346,61 @@ def run_events(run_id: str, after: int = 0):
         rs.close()
 
 
+@app.post("/api/runs/{run_id}/approve")
+def run_approve(run_id: str):
+    """The gate. Only a run that is actually waiting on a human can pass it."""
+    rs = RunStore()
+    try:
+        r = rs.get(run_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        if r["status"] != "awaiting_approval":
+            raise HTTPException(
+                status_code=409,
+                detail=f"this run is {r['status']}, not waiting for approval")
+        rs.emit(run_id, "approve", "done", "Approved by a human — opening the PR")
+        rs.db.execute("UPDATE runs SET status='running', phase='pr' WHERE id=?",
+                      (run_id,))
+        rs.db.commit()
+    finally:
+        rs.close()
+    RunEngine.approve(run_id)
+    return {"approved": run_id}
+
+
+class RejectIn(BaseModel):
+    note: str | None = None
+
+
+@app.post("/api/runs/{run_id}/reject")
+def run_reject(run_id: str, body: RejectIn | None = None):
+    rs = RunStore()
+    try:
+        r = rs.get(run_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        if r["status"] != "awaiting_approval":
+            raise HTTPException(status_code=409,
+                                detail=f"this run is {r['status']}")
+        note = (body.note if body else None) or "no reason given"
+        rs.emit(run_id, "approve", "warn", "Rejected by a human", {"note": note},
+                level="warn")
+        # The reason a human said no is the highest-value sentence this system
+        # ever sees. It used to be discarded; now it becomes a lesson.
+        mem = MemoryStore()
+        try:
+            remember_rejection(mem, r["repo"], run_id, r["goal"], note)
+        finally:
+            mem.close()
+        rs.finish(run_id, "rejected",
+                  reason=f"Rejected: {note}",
+                  next_action="The workspace is kept — start a new run with a "
+                              "sharper goal, or fix it by hand.")
+    finally:
+        rs.close()
+    return {"rejected": run_id}
+
+
 @app.delete("/api/runs/{run_id}")
 def run_delete(run_id: str):
     rs = RunStore()
@@ -354,6 +410,56 @@ def run_delete(run_id: str):
         return {"deleted": run_id}
     finally:
         rs.close()
+
+
+# ─── repo memory ────────────────────────────────────────────────────────────
+
+class MemoryIn(BaseModel):
+    repo: str
+    kind: str
+    title: str
+    body: str
+
+
+@app.get("/api/memory")
+def memory_list(repo: str | None = None):
+    m = MemoryStore()
+    try:
+        return {"kinds": list(KINDS), "memories": m.list(repo)}
+    finally:
+        m.close()
+
+
+@app.post("/api/memory")
+def memory_add(body: MemoryIn):
+    m = MemoryStore()
+    try:
+        return m.add(body.repo, body.kind, body.title, body.body, source="human")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        m.close()
+
+
+@app.delete("/api/memory/{mem_id}")
+def memory_delete(mem_id: int):
+    m = MemoryStore()
+    try:
+        if not m.delete(mem_id):
+            raise HTTPException(status_code=404, detail="no such memory")
+        return {"deleted": mem_id}
+    finally:
+        m.close()
+
+
+@app.get("/api/memory/preview")
+def memory_preview(repo: str):
+    """Exactly what gets injected into the next run's prompts, verbatim."""
+    m = MemoryStore()
+    try:
+        return {"repo": repo, "text": m.for_prompt(repo)}
+    finally:
+        m.close()
 
 
 # ─── pull requests ──────────────────────────────────────────────────────────

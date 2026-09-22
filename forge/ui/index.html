@@ -13,8 +13,12 @@
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
+  body{margin:0;background:var(--bg);color:var(--ink);overflow-x:hidden;
        font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  /* Grid and flex children default to min-width:auto, so one long file path or
+     wide table stretches its whole column and the page scrolls sideways.
+     Everything that lays out children opts them back out of that. */
+  .split>*,.grid>*,.item>*,.row>*,.ev2>*,.link>*,.runrow>*{min-width:0}
   a{color:var(--accent);text-decoration:none}
   header{display:flex;align-items:center;gap:14px;padding:14px 20px;
          border-bottom:1px solid var(--line);background:var(--panel);
@@ -29,8 +33,9 @@
     padding:6px 13px;border-radius:7px;cursor:pointer;font-size:13px;font-family:inherit}
   nav button:hover{color:var(--ink);background:var(--panel2)}
   nav button.on{background:var(--panel2);color:var(--ink);border-color:var(--line)}
-  main{padding:20px;max-width:1180px;margin:0 auto}
-  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+  main{padding:20px;max-width:1080px;margin:0 auto;width:100%}
+  .grid{display:grid;gap:14px;
+        grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr))}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px}
   .card h3{margin:0 0 10px;font-size:14px;font-weight:600}
   .kv{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:13px}
@@ -38,8 +43,9 @@
   .kv span:last-child{font-family:var(--mono);font-size:12px}
   .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
   input,select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
-    padding:9px 12px;border-radius:8px;font:inherit;font-size:13px}
-  input{flex:1;min-width:210px}
+    padding:9px 12px;border-radius:8px;font:inherit;font-size:13px;max-width:100%}
+  input{flex:1 1 180px;min-width:0}
+  select{flex:0 1 auto;min-width:0}
   input:focus,select:focus{outline:none;border-color:var(--accent)}
   button.go{background:var(--accent);color:#1a1005;border:none;padding:9px 17px;
     border-radius:8px;font-weight:600;cursor:pointer;font-family:inherit;font-size:13px}
@@ -53,7 +59,7 @@
         border:1px solid var(--line);border-radius:5px;padding:2px 6px;flex:none}
   .qn{font-family:var(--mono);font-size:13px;color:var(--ink)}
   .loc{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--ink3);
-       text-align:right;flex:none}
+       text-align:right;flex:0 1 auto;max-width:38%;overflow-wrap:anywhere}
   .sig{font-family:var(--mono);font-size:11.5px;color:var(--ink2);
        overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .badge{font-size:10px;font-weight:700;letter-spacing:.5px;padding:2px 7px;
@@ -97,6 +103,30 @@
   .blocker .ba{font-size:12.5px;color:var(--ink2);margin-top:7px;
                padding-top:7px;border-top:1px solid rgba(240,136,62,.22)}
   .blocker .ba b{color:var(--accent)}
+  .d-awaiting_approval{background:var(--accent)} .d-rejected{background:var(--ink3)}
+  .gate{border:1px solid rgba(63,185,80,.32);background:rgba(63,185,80,.07);
+        border-radius:10px;padding:13px 15px;margin-bottom:14px}
+  .gate .gt{font-size:13px;color:var(--ink);line-height:1.5}
+  .gate code{font-family:var(--mono);color:var(--hi)}
+  .subnav{display:flex;gap:2px;padding:3px;background:var(--panel);border:1px solid var(--line);
+          border-radius:9px;margin-bottom:16px;width:fit-content;max-width:100%;flex-wrap:wrap}
+  .subnav button{background:transparent;border:none;color:var(--ink3);padding:6px 15px;
+                 border-radius:7px;cursor:pointer;font:inherit;font-size:13px}
+  .subnav button:hover{color:var(--ink)}
+  .subnav button.on{background:var(--panel2);color:var(--ink)}
+  .mem{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;gap:11px;align-items:flex-start}
+  .mem:last-child{border-bottom:none}
+  .mem .mk{font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;padding:3px 7px;
+           border-radius:5px;flex:none;margin-top:1px}
+  .mk-gotcha{background:rgba(248,81,73,.14);color:#f85149}
+  .mk-lesson{background:rgba(240,136,62,.14);color:var(--accent)}
+  .mk-convention{background:rgba(63,185,80,.13);color:var(--hi)}
+  .mk-decision{background:rgba(139,148,158,.14);color:var(--lo)}
+  .mem .mb{font-size:12.5px;color:var(--ink2);margin-top:3px;line-height:1.5}
+  .mem .mx{margin-left:auto;flex:none;display:flex;gap:8px;align-items:center}
+  .srcpill{font-size:10px;color:var(--ink3);font-family:var(--mono)}
+  .xbtn{background:none;border:none;color:var(--ink3);cursor:pointer;font-size:15px;padding:0 4px}
+  .xbtn:hover{color:#f85149}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
   .rg{font-size:12.5px;line-height:1.35;overflow:hidden;display:-webkit-box;
       -webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -136,16 +166,23 @@
   .body{padding:2px 13px 14px 39px;border-bottom:1px solid var(--line);background:var(--panel2)}
   .body pre{margin:0;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;
             word-break:break-word;color:var(--ink2);max-height:420px;overflow:auto}
-  .body table{border-collapse:collapse;font-size:11.5px;font-family:var(--mono);width:100%}
+  .body table{border-collapse:collapse;font-size:11.5px;font-family:var(--mono);
+              width:100%;table-layout:fixed}
   .body td{padding:3px 10px 3px 0;vertical-align:top;color:var(--ink2);
-           border-bottom:1px solid var(--line)}
-  .body td:first-child{color:var(--ink3);white-space:nowrap}
+           border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+  .body td:first-child{color:var(--ink3);width:30%}
+  .body pre{max-width:100%}
   .prose{font-family:ui-sans-serif,system-ui;font-size:13px;line-height:1.6;color:var(--ink);
          white-space:pre-wrap}
   .chips{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
   .chip{font-size:11.5px;padding:4px 11px;border-radius:20px;border:1px solid var(--line);
         color:var(--ink2);cursor:pointer;background:transparent;font-family:inherit}
   .chip.on{background:var(--panel2);color:var(--ink);border-color:var(--accent)}
+
+  /* Long identifiers, paths and URLs break rather than widen their container. */
+  .qn,.tt,.rg,.prose,.bt,.sec,.kv span:last-child,.link code,h1,h3{overflow-wrap:anywhere}
+  .stepper{max-width:100%}
+  pre,code{overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -157,19 +194,26 @@
   </div>
   <nav>
     <button data-tab="coder" class="on">Coder</button>
-    <button data-tab="repos">Repos</button>
-    <button data-tab="explore">Explore</button>
-    <button data-tab="wayfinder">Wayfinder</button>
+    <button data-tab="code">Code</button>
     <button data-tab="prs">PRs</button>
+    <button data-tab="memory">Memory</button>
     <button data-tab="settings">Settings</button>
   </nav>
 </header>
 <main>
   <div id="coder"></div>
-  <div id="repos" hidden></div>
-  <div id="explore" hidden></div>
-  <div id="wayfinder" hidden></div>
+  <div id="code" hidden>
+    <div class="subnav">
+      <button data-sub="repos" class="on">Overview</button>
+      <button data-sub="explore">Search</button>
+      <button data-sub="wayfinder">Impact</button>
+    </div>
+    <div id="repos"></div>
+    <div id="explore" hidden></div>
+    <div id="wayfinder" hidden></div>
+  </div>
   <div id="prs" hidden></div>
+  <div id="memory" hidden></div>
   <div id="settings" hidden></div>
 </main>
 
@@ -193,11 +237,16 @@ let REPOS = [];
 /* ── tabs ─────────────────────────────────────────────────────────── */
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
-  ['coder','repos','explore','wayfinder','prs','settings'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
-  if(b.dataset.tab==='explore') $('#q')?.focus();
+  ['coder','code','prs','memory','settings'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
   if(b.dataset.tab==='settings') loadSettings();
   if(b.dataset.tab==='coder') loadRuns();
   if(b.dataset.tab==='prs') loadPRs();
+  if(b.dataset.tab==='memory') loadMemory();
+});
+document.querySelectorAll('.subnav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.subnav button').forEach(x=>x.classList.toggle('on',x===b));
+  ['repos','explore','wayfinder'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.sub));
+  if(b.dataset.sub==='explore') $('#q')?.focus();
 });
 
 /* ── repos ────────────────────────────────────────────────────────── */
@@ -374,7 +423,8 @@ async function runWay(){
 /* ── coder: runs ──────────────────────────────────────────────────── */
 const GLYPH = {step:['▸','var(--accent)'], metric:['▦','var(--ink2)'], finding:['◆','var(--accent)'],
   impact:['⚡','var(--med)'], warn:['▲','var(--med)'], error:['✕','#f85149'],
-  plan:['▤','var(--accent)'], done:['✓','var(--hi)'], info:['·','var(--ink3)']};
+  plan:['▤','var(--accent)'], done:['✓','var(--hi)'], info:['·','var(--ink3)'],
+  diff:['±','var(--accent)'], file:['▸','var(--ink2)']};
 let PHASES = [], CUR = null, POLL = null, SEEN = 0, EVENTS = [], FILTER = 'all';
 
 function flat(v){
@@ -392,6 +442,15 @@ function preview(d){
 }
 function body(d){
   if(d==null) return '';
+  if(d.text && /^(---|\+\+\+|@@|diff )/m.test(d.text)){
+    const html = d.text.split('\n').map(l=>{
+      const c = l.startsWith('+') && !l.startsWith('+++') ? 'var(--hi)'
+              : l.startsWith('-') && !l.startsWith('---') ? '#f85149'
+              : l.startsWith('@@') ? 'var(--accent)' : 'var(--ink3)';
+      return `<span style="color:${c}">${esc(l)}</span>`;
+    }).join('\n');
+    return `<pre>${html}</pre>`;
+  }
   if(d.text){
     const rest = Object.entries(d).filter(([k])=>k!=='text');
     return `<div class="prose">${esc(d.text)}</div>` +
@@ -511,15 +570,33 @@ function renderRun(run){
   const last = EVENTS[EVENTS.length-1];
   // A terminal run says what it actually ended as — never a bare "finished",
   // which is what made a run that stopped at Plan look like a completed one.
-  const ENDED = {complete:'complete — ready for a human',
+  const ENDED = {complete:'complete — pull request opened',
                  incomplete:'stopped — the road runs out here',
                  blocked:'blocked — it could not continue',
+                 awaiting_approval:'waiting for your decision',
+                 rejected:'rejected',
                  failed:'failed'};
   const nowText = running ? (last ? last.title : 'starting…')
                           : (ENDED[run.status] || run.status);
   const pill = {running:'b-medium', queued:'b-low', complete:'b-high',
                 incomplete:'b-medium', blocked:'b-medium', done:'b-high',
+                awaiting_approval:'b-medium', rejected:'b-low',
                 failed:'b-low'}[run.status] || 'b-low';
+  const gate = run.status === 'awaiting_approval' ? `
+      <div class="gate">
+        <div class="gt">Nothing has been pushed. Approving opens a pull request
+          against <code>dev</code>, ready for review.</div>
+        <div class="row" style="margin:11px 0 0">
+          <button class="go" id="okbtn">Approve &amp; open PR</button>
+          <button class="go" id="nobtn"
+                  style="background:#33383f;color:var(--ink2)">Reject</button>
+        </div>
+      </div>` : '';
+  const prlink = run.pr_url ? `
+      <div class="blocker" style="border-color:rgba(63,185,80,.35);background:rgba(63,185,80,.08)">
+        <div class="bt" style="color:var(--hi)">Pull request opened</div>
+        <div class="ba"><a href="${esc(run.pr_url)}" target="_blank" rel="noopener">${esc(run.pr_url)} ↗</a></div>
+      </div>` : '';
   const blocker = (!running && (run.stopped_reason || run.error)) ? `
       <div class="blocker">
         <div class="bt">${esc(run.stopped_reason || run.error)}</div>
@@ -541,7 +618,7 @@ function renderRun(run){
         · model ${esc(run.model || 'none')} · ${esc((run.created_at||'').replace('T',' ').replace('+00:00',''))}
       </div>
       <div class="stepper">${steps}</div>
-      ${blocker}
+      ${prlink}${gate}${blocker}
       <div class="now">
         <div class="dot d-${esc(run.status)}" style="margin:0"></div>
         <div><b>${esc(nowText)}</b></div>
@@ -560,6 +637,20 @@ function renderRun(run){
 
   $('#rundetail').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
     FILTER = c.dataset.f; renderRun(run); });
+
+  const ok = $('#okbtn'), no = $('#nobtn');
+  if(ok) ok.onclick = async ()=>{
+    ok.disabled = no.disabled = true; ok.textContent = 'opening…';
+    try{ await send('POST',`/runs/${run.id}/approve`); openRun(run.id); }
+    catch(e){ alert(e.message); ok.disabled = no.disabled = false;
+              ok.textContent = 'Approve & open PR'; }
+  };
+  if(no) no.onclick = async ()=>{
+    const note = prompt('Why are you rejecting it? (optional)') ?? null;
+    ok.disabled = no.disabled = true;
+    try{ await send('POST',`/runs/${run.id}/reject`,{note}); openRun(run.id); }
+    catch(e){ alert(e.message); ok.disabled = no.disabled = false; }
+  };
 
   const tl = $('#tl');
   const shown = EVENTS.filter(e =>
@@ -591,6 +682,77 @@ function renderRun(run){
       tl.appendChild(b);
       row.onclick = ()=>{ b.hidden = !b.hidden; };
     }
+  });
+}
+
+/* ── repo memory ──────────────────────────────────────────────────── */
+async function loadMemory(){
+  const box = $('#memory');
+  box.innerHTML = '<div class="spin">…</div>';
+  let d;
+  try{ d = await get('/memory'); }
+  catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+
+  box.innerHTML = `<div class="hint">What the coder already knows about each repo.
+    Conventions are read from the repo's own AGENTS.md / CLAUDE.md, lessons are captured
+    when you reject a change, gotchas when a build trips over something. All of it is
+    injected into the next run's planning and building prompts.</div>`;
+
+  box.appendChild(el(`<div class="card" style="margin-bottom:16px">
+      <div class="row" style="margin:0">
+        <select id="mrepo">${REPOS.map(r=>`<option>${esc(r.name)}</option>`).join('')}</select>
+        <select id="mkind">${d.kinds.map(k=>`<option>${esc(k)}</option>`).join('')}</select>
+        <input id="mtitle" placeholder="short title — what it is">
+        <input id="mbody" placeholder="the rule, in one or two sentences" style="flex:2">
+        <button class="go" id="msave2">Remember</button>
+        <button class="go" id="mprev" style="background:#33383f;color:var(--ink2)">Preview prompt</button>
+      </div>
+      <div id="mpv" class="hint" style="margin:11px 0 0"></div>
+    </div>`));
+  $('#msave2').onclick = async ()=>{
+    const b = {repo:$('#mrepo').value, kind:$('#mkind').value,
+               title:$('#mtitle').value.trim(), body:$('#mbody').value.trim()};
+    if(!b.title||!b.body){ alert('title and body are required'); return; }
+    try{ await send('POST','/memory',b); loadMemory(); }catch(e){ alert(e.message); }
+  };
+  $('#mprev').onclick = async ()=>{
+    const p = $('#mpv'); p.textContent = 'loading…';
+    try{
+      const r = await get('/memory/preview',{repo:$('#mrepo').value});
+      p.innerHTML = r.text
+        ? `<pre style="white-space:pre-wrap;font-size:11.5px;color:var(--ink2);margin:0">${esc(r.text)}</pre>`
+        : 'Nothing is remembered for this repo yet, so nothing would be injected.';
+    }catch(e){ p.textContent = e.message; }
+  };
+
+  const byRepo = {};
+  d.memories.forEach(m=>(byRepo[m.repo] ||= []).push(m));
+  if(!d.memories.length){
+    box.appendChild(el('<div class="list"><div class="empty">Nothing remembered yet. Run the coder once — it reads the repo\'s own conventions on the way through.</div></div>'));
+    return;
+  }
+  Object.entries(byRepo).forEach(([repo, items])=>{
+    box.appendChild(el(`<div class="sec">${esc(repo)} <span class="muted">· ${items.length}</span></div>`));
+    const list = el('<div class="list"></div>');
+    items.forEach(m=>{
+      const row = el(`<div class="mem">
+          <span class="mk mk-${esc(m.kind)}">${esc(m.kind)}</span>
+          <div style="min-width:0;flex:1">
+            <div style="font-size:13px">${esc(m.title)}</div>
+            <div class="mb">${esc(m.body)}</div>
+          </div>
+          <div class="mx">
+            <span class="srcpill">${esc(m.source||'')}${m.hits?` · used ${m.hits}×`:''}</span>
+            <button class="xbtn" title="forget">×</button>
+          </div>
+        </div>`);
+      row.querySelector('.xbtn').onclick = async ()=>{
+        if(!confirm(`Forget "${m.title}"?`)) return;
+        await send('DELETE',`/memory/${m.id}`); loadMemory();
+      };
+      list.appendChild(row);
+    });
+    box.appendChild(list);
   });
 }
 
@@ -693,7 +855,7 @@ function prBody(d){
 }
 
 /* ── settings: credentials + models ───────────────────────────────── */
-const PROVIDERS = ['github','anthropic','openai','openai-compatible','ollama'];
+const PROVIDERS = ['github','anthropic','openai','openai-compatible','ollama','claude-cli'];
 const ROLES = ['engineer','council','judge','fast'];
 
 async function send(method, path, body){
