@@ -1,0 +1,20 @@
+#!/bin/sh
+# forge — run the forge CLI from inside the Prometheus IDE.
+#
+# The IDE container cannot see /opt/forge, but it can talk to the host's docker
+# daemon, and the daemon resolves these paths on the HOST. So the mounts below
+# are host paths, not paths in this container. That is why this works without
+# adding a bind mount (which would mean restarting the IDE and killing tmux).
+set -e
+
+exec docker run --rm -i \
+  -v /opt/forge/data:/data \
+  -v /opt/forge/config:/config \
+  -v /opt/forge/work:/work \
+  -v /opt/prometheus/backend:/repos/prom-backend:ro \
+  -v /opt/prometheus/frontend:/repos/prom-frontend:ro \
+  -e FORGE_DB=/data/forge.db \
+  -e FORGE_CONFIG_DB=/config/forge-config.db \
+  -e FORGE_RUNS_DB=/config/forge-runs.db \
+  -e FORGE_MEMORY_DB=/config/forge-memory.db \
+  forge:dev python -m forge.cli "$@"

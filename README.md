@@ -194,6 +194,31 @@ GET    /api/models · POST /api/models · POST /api/models/{name}/test
 GET    /api/providers/{provider}/models
 ```
 
+## Working on forge from the Prometheus IDE
+
+The IDE container cannot see `/opt/forge`, and it should not be restarted to add
+a bind mount — it holds long-lived tmux sessions. It does have the docker
+socket, and the daemon resolves paths on the *host*, which is enough. Two
+commands are installed at `/usr/local/bin` there (sources in `tools/`):
+
+```bash
+forge repos | overview | search | impacts | links | index      # query the index
+forge-src status     # host git log + anything uncommitted, and the local copy
+forge-src pull       # /opt/forge           -> /workspace/forge-src
+forge-src push       # /workspace/forge-src -> /opt/forge
+forge-src build      # rebuild the image and restart the UI container
+```
+
+`/opt/forge` is canonical: it holds the git history and the service is built
+from it. `/workspace/forge-src` is a working copy.
+
+**`push` refuses while the host repo is dirty.** That is the whole safety
+property: uncommitted changes on the host mean someone is mid-edit, and a
+wholesale copy would destroy their work without saying so. Commit first.
+
+Note `/workspace/forge` is an unrelated 2026-06 project. The working copy is
+deliberately `/workspace/forge-src`.
+
 ## Roadmap
 
 1. **Code index** ← done

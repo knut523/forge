@@ -1,0 +1,83 @@
+#!/bin/sh
+# forge-src — move the forge source between the host repo and this workspace.
+#
+#   forge-src pull     /opt/forge            -> /workspace/forge-src
+#   forge-src push     /workspace/forge-src  -> /opt/forge
+#   forge-src status   what differs, and whether the host repo is dirty
+#   forge-src build    rebuild the forge image and restart the UI container
+#
+# The canonical repo is /opt/forge on the host: it holds the git history and it
+# is what the running service is built from. This workspace copy is a working
+# area. `push` refuses while the host repo has uncommitted changes, because that
+# is exactly when someone else is mid-edit and a wholesale copy would silently
+# destroy their work.
+set -e
+
+SRC=/opt/forge                  # host path (resolved by the docker daemon)
+DST=/workspace/forge-src        # path inside this container
+IMG=alpine:3.20
+
+host_dirty() {
+  docker run --rm -v "$SRC":/src "$IMG" \
+    sh -c 'command -v git >/dev/null 2>&1 || apk add --no-cache git >/dev/null 2>&1;
+           git -C /src status --porcelain' 2>/dev/null
+}
+
+case "${1:-}" in
+  pull)
+    mkdir -p "$DST"
+    docker run --rm -v "$SRC":/src:ro "$IMG" \
+      tar -C /src --exclude=./data --exclude=./work --exclude=./config -cf - . \
+      | tar -C "$DST" -xf -
+    echo "pulled $SRC -> $DST"
+    ;;
+
+  push)
+    dirty=$(host_dirty || true)
+    if [ -n "$dirty" ]; then
+      echo "REFUSING: the host repo has uncommitted changes:" >&2
+      echo "$dirty" >&2
+      echo "" >&2
+      echo "Someone (or something) is mid-edit there. Commit or stash on the" >&2
+      echo "host first, then push again." >&2
+      exit 1
+    fi
+    [ -d "$DST" ] || { echo "no $DST — run 'forge-src pull' first" >&2; exit 1; }
+    tar -C "$DST" --exclude=./.git --exclude=./data --exclude=./work \
+                  --exclude=./config -cf - . \
+      | docker run --rm -i -v "$SRC":/dst "$IMG" tar -C /dst -xf -
+    echo "pushed $DST -> $SRC   (now commit it on the host, or run: forge-src build)"
+    ;;
+
+  status)
+    echo "--- host repo ($SRC) ---"
+    docker run --rm -v "$SRC":/src "$IMG" \
+      sh -c 'command -v git >/dev/null 2>&1 || apk add --no-cache git >/dev/null 2>&1;
+             git -C /src log --oneline -3; echo; git -C /src status --short' 2>/dev/null
+    echo "--- workspace copy ($DST) ---"
+    [ -d "$DST" ] && ls "$DST" || echo "(not pulled yet)"
+    ;;
+
+  build)
+    docker build -q -t forge:dev "$SRC" >/dev/null
+    docker rm -f forge-ui >/dev/null 2>&1 || true
+    docker run -d --name forge-ui --restart unless-stopped --memory=512m \
+      -p 172.17.0.1:8910:8910 \
+      -v /opt/forge/data:/data -v /opt/forge/config:/config -v /opt/forge/work:/work \
+      -v /opt/prometheus/backend:/repos/prom-backend:ro \
+      -v /opt/prometheus/frontend:/repos/prom-frontend:ro \
+      -e FORGE_CONFIG_DB=/config/forge-config.db \
+      -e FORGE_RUNS_DB=/config/forge-runs.db \
+      -e FORGE_MEMORY_DB=/config/forge-memory.db \
+      -e FORGE_DB=/data/forge.db forge:dev >/dev/null
+    docker network connect prometheus_default forge-ui 2>/dev/null || true
+    sleep 4
+    echo -n "health: "; docker exec forge-ui python -c \
+      "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8910/api/health').read().decode())"
+    ;;
+
+  *)
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+    ;;
+esac
