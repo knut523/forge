@@ -124,7 +124,8 @@
   .blocker .ba b{color:var(--accent)}
   .d-awaiting_approval{background:var(--accent)} .d-rejected{background:var(--ink3)}
   .d-review{background:var(--accent)} .d-pending{background:var(--ink3)}
-  .viewbar{display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  .viewbar{display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line);align-items:center}
+  .viewbar .vbspacer{flex:1}
   .viewbar button{font-size:12px;padding:4px 13px;border:1px solid var(--line);border-radius:7px;
     background:var(--panel);color:var(--ink2);cursor:pointer}
   .viewbar button.on{background:var(--accent);color:#fff;border-color:transparent;font-weight:600}
@@ -605,6 +606,7 @@ const GLYPH = {step:['▸','var(--accent)'], metric:['▦','var(--ink2)'], findi
 let PHASES = [], EPHASES = [], CUR = null, POLL = null, SEEN = 0, EVENTS = [],
     FILTER = 'all', ITEMS = null;
 let VIEW = localStorage.getItem('forge_view') || 'tree';   // 'tree' | 'board'
+let BOARD_LEVEL = localStorage.getItem('forge_board_level') || 'task';  // 'task' | 'epic' — board granularity
 let EXPANDED = new Set(JSON.parse(localStorage.getItem('forge_expanded') || '[]'));  // epics shown open (default collapsed)
 
 function flat(v){
@@ -780,8 +782,12 @@ async function loadRuns(){
     list.innerHTML=''; const attn = $('#needsattn'); if(attn) attn.innerHTML='';
     const bar = el(`<div class="viewbar">
         <button data-v="tree" class="${VIEW==='tree'?'on':''}">Tree</button>
-        <button data-v="board" class="${VIEW==='board'?'on':''}">Board</button></div>`);
-    bar.querySelectorAll('button').forEach(b=>b.onclick=()=>{ VIEW=b.dataset.v; localStorage.setItem('forge_view',VIEW); loadRuns(); });
+        <button data-v="board" class="${VIEW==='board'?'on':''}">Board</button>
+        ${VIEW==='board'?`<span class="vbspacer"></span>
+        <button data-lvl="task" class="${BOARD_LEVEL==='task'?'on':''}" title="A card per subtask">Subtasks</button>
+        <button data-lvl="epic" class="${BOARD_LEVEL==='epic'?'on':''}" title="A card per feature (epic)">Epics</button>`:''}</div>`);
+    bar.querySelectorAll('button[data-v]').forEach(b=>b.onclick=()=>{ VIEW=b.dataset.v; localStorage.setItem('forge_view',VIEW); loadRuns(); });
+    bar.querySelectorAll('button[data-lvl]').forEach(b=>b.onclick=()=>{ BOARD_LEVEL=b.dataset.lvl; localStorage.setItem('forge_board_level',BOARD_LEVEL); loadRuns(); });
     list.appendChild(bar);
     if(!runs.length){ list.appendChild(el(`<div class="empty">No runs${ACTIVE_ORG?` for ${esc(ACTIVE_ORG)}`:''} yet.</div>`)); return; }
     const runById = Object.fromEntries(runs.map(r=>[r.id, r]));
@@ -860,20 +866,43 @@ function bucketOf(st){                              // map every run status onto
   if(!st || st==='pending' || st==='queued' || st==='not_started') return 'todo';
   return 'doing';   // running, review, awaiting_approval, blocked, failed, rejected, incomplete
 }
+function epicBucket(ep, items, runById){            // an epic's lane follows its steps' progress
+  if(!items.length) return bucketOf(ep.status);
+  const sts = items.map(it=>{ const cr=it.run_id&&runById[it.run_id]; return cr?cr.status:it.status; });
+  if(sts.every(s=>s==='complete')) return 'done';
+  if(sts.some(s=>s && !['pending','queued','not_started'].includes(s))) return 'doing';
+  return 'todo';
+}
 function renderBoard(list, runs, runById, epics, epicItems){
   const cards = [];
-  for(const ep of epics){
-    const eg = ep.goal.split('\n')[0].slice(0,32);
-    for(const it of (epicItems[ep.id]||[])){
-      const rid = it.run_id, cr = rid && runById[rid];
-      cards.push({id:rid, title:`#${it.seq+1} ${it.title}`, repo:it.repo,
-                  status:(cr?cr.status:it.status), epic:eg, pr:cr?cr.pr_url:null});
+  if(BOARD_LEVEL==='epic'){                          // one card per feature (epic)
+    for(const ep of epics){
+      const items = epicItems[ep.id]||[];
+      const done = items.filter(it=>{ const cr=it.run_id&&runById[it.run_id]; return (cr?cr.status:it.status)==='complete'; }).length;
+      cards.push({id:ep.id, title:ep.goal.split('\n')[0], repo:ep.repo, status:ep.status,
+                  bucket:epicBucket(ep, items, runById),
+                  meta:(items.length?`${done}/${items.length} steps`:'feature')});
     }
+    for(const r of runs.filter(r=>r.kind!=='epic' && !r.parent_id))
+      cards.push({id:r.id, title:r.goal.split('\n')[0], repo:r.repo, status:r.status,
+                  bucket:bucketOf(r.status), meta:(r.pr_url?'PR ✓':'single change')});
+  } else {                                           // one card per subtask
+    for(const ep of epics){
+      const eg = ep.goal.split('\n')[0].slice(0,32);
+      for(const it of (epicItems[ep.id]||[])){
+        const rid = it.run_id, cr = rid && runById[rid];
+        const st = cr?cr.status:it.status;
+        cards.push({id:rid, title:`#${it.seq+1} ${it.title}`, repo:it.repo, status:st,
+                    bucket:bucketOf(st),
+                    meta:'↳ '+eg+(st==='awaiting_approval'?' · approve':'')+((cr&&cr.pr_url)?' · PR ✓':'')});
+      }
+    }
+    for(const r of runs.filter(r=>r.kind!=='epic' && !r.parent_id))
+      cards.push({id:r.id, title:r.goal.split('\n')[0], repo:r.repo, status:r.status,
+                  bucket:bucketOf(r.status), meta:(r.pr_url?'PR ✓':'single change')});
   }
-  for(const r of runs.filter(r=>r.kind!=='epic' && !r.parent_id))
-    cards.push({id:r.id, title:r.goal.split('\n')[0], repo:r.repo, status:r.status, epic:null, pr:r.pr_url});
   const cols = {todo:[], doing:[], done:[]};
-  cards.forEach(c=>cols[bucketOf(c.status)].push(c));
+  cards.forEach(c=>cols[c.bucket].push(c));
   const labels = {todo:'To do', doing:'In progress', done:'Done'};
   const board = el(`<div class="kanban"></div>`);
   ['todo','doing','done'].forEach(k=>{
@@ -883,7 +912,7 @@ function renderBoard(list, runs, runById, epics, epicItems){
           <div class="dot d-${esc(c.status)}"></div>
           <div style="min-width:0;flex:1">
             <div class="rg" style="font-size:12px">${esc(c.title.slice(0,58))}</div>
-            <div class="rmeta">${esc(c.repo)}${c.epic?' · ↳ '+esc(c.epic):''}${c.status==='awaiting_approval'?' · approve':''}${c.pr?' · PR ✓':''}</div>
+            <div class="rmeta">${esc(c.repo)}${c.meta?' · '+esc(c.meta):''}</div>
           </div></div>`);
       if(c.id) card.onclick = ()=>openRun(c.id);
       col.appendChild(card);
