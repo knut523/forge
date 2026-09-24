@@ -49,10 +49,13 @@ CHAIR_SYSTEM = (
 
 def _panel(cfg: ConfigStore, models: list[str] | None) -> list[dict]:
     enabled = [m for m in cfg.list_models() if m["enabled"]]
-    if models:
+    if models:                                   # explicit override wins
         want = {n.lower() for n in models}
-        enabled = [m for m in enabled if m["name"].lower() in want] or enabled
-    return enabled
+        return [m for m in enabled if m["name"].lower() in want] or enabled
+    # Otherwise prefer models Knut curated onto the panel with the 'council' role;
+    # fall back to every enabled model so a council always convenes.
+    seated = [m for m in enabled if str(m.get("role", "")).lower() == "council"]
+    return seated or enabled
 
 
 def _tok(cfg: ConfigStore, m: dict) -> str | None:
