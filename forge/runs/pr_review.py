@@ -349,8 +349,20 @@ def review(cfg: ConfigStore, owner: str, repo: str, number: int,
         # strongest configured model. The deterministic seeds are still folded in.
         rm = models[0]
         ev("agent", "info", f"agentic review with {rm['name']} — tools: read/grep/run_tests")
-        ao = AGENT.review(cfg, rm, _tok(cfg, rm), local_repo, diff, changed,
-                          goal=(pr.get("title") or ""), grounding=g["block"], on_event=ev)
+        # Give the agent a CLEAN checkout of the PR's real head branch (robust against a
+        # diverged base); fall back to diff-apply if the fetch fails.
+        prepared = REx.prepare_pr(local_repo, f"{owner}/{repo}", number, read_token) if local_repo else {}
+        if prepared.get("error"):
+            ev("agent", "info", f"clean PR clone unavailable ({prepared['error']}); using diff")
+            prepared = None
+        try:
+            ao = AGENT.review(cfg, rm, _tok(cfg, rm), local_repo, diff, changed,
+                              goal=(pr.get("title") or ""), grounding=g["block"],
+                              on_event=ev, prepared=prepared)
+        finally:
+            if prepared and prepared.get("scratch"):
+                import shutil as _sh
+                _sh.rmtree(prepared["scratch"], ignore_errors=True)
         if ao.get("error"):
             return {"error": ao["error"]}
         review_obj = {"summary": ao.get("summary", ""), "findings": ao.get("findings", []),

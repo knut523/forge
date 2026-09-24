@@ -79,6 +79,40 @@ def _prepare(repo_name: str, diff: str) -> dict:
     return {"error": f"could not apply the change to a clean base: {(p.stderr or '')[:160]}"}
 
 
+def prepare_pr(repo_name: str, owner_repo: str, number: int, token: str | None) -> dict:
+    """A CLEAN checkout of the PR's actual head branch — the robust alternative to
+    patching the diff onto the default clone (which fails when the PR's base has
+    diverged, e.g. package.json conflicts). Reuses the local /work clone (fast) and
+    fetches `pull/N/head`. Returns {dir, scratch} or {error}. The token is used only
+    for the fetch and never left in the checkout."""
+    clone = _clone(repo_name)
+    if not clone:
+        return {"error": f"repo {repo_name!r} is not cloned under {WORK}"}
+    scratch = Path(tempfile.mkdtemp(prefix="forge-pr-"))
+    dst = scratch / repo_name
+    try:
+        shutil.copytree(clone, dst, ignore=shutil.ignore_patterns(
+            "node_modules", ".venv", "__pycache__", ".pytest_cache"))
+    except Exception as e:
+        shutil.rmtree(scratch, ignore_errors=True)
+        return {"error": f"could not stage a scratch copy: {e}"}
+    url = (f"https://x-access-token:{token}@github.com/{owner_repo}.git"
+           if token else f"https://github.com/{owner_repo}.git")
+    fetch = subprocess.run(
+        ["git", "-C", str(dst), "fetch", "--depth", "1", url,
+         f"pull/{number}/head:__forge_pr"], capture_output=True, text=True, timeout=180)
+    if fetch.returncode != 0:
+        shutil.rmtree(scratch, ignore_errors=True)
+        err = (fetch.stderr or "").replace(token or "\0", "***")[:160]
+        return {"error": f"could not fetch PR #{number}: {err}"}
+    co = subprocess.run(["git", "-C", str(dst), "checkout", "-q", "__forge_pr"],
+                        capture_output=True, text=True, timeout=60)
+    if co.returncode != 0:
+        shutil.rmtree(scratch, ignore_errors=True)
+        return {"error": f"could not checkout PR #{number}: {(co.stderr or '')[:160]}"}
+    return {"dir": str(dst), "scratch": str(scratch)}
+
+
 def _run_pytest(dst: str, tests: list[str], timeout: int) -> tuple[int, str]:
     p = subprocess.run(
         ["python3", "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", *tests],

@@ -96,14 +96,21 @@ def _tool(call: dict, root: str, repo_name: str) -> str:
 
 def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
            changed_files: list[str], goal: str = "", grounding: str = "",
-           max_steps: int = 16, on_event=None) -> dict:
+           max_steps: int = 16, on_event=None, prepared: dict | None = None) -> dict:
     """Run the agentic tool loop with `model`. Returns {findings, summary, verdict, steps}
-    or {error}/{why}. Read-only: never writes or pushes."""
+    or {error}/{why}. Read-only: never writes or pushes.
+
+    `prepared` is a {dir, scratch} from review_exec.prepare_pr — a clean checkout of the
+    PR's real head branch (the robust source the caller owns and cleans up). Without it,
+    the diff is patched onto the default clone (fails when the base diverged)."""
     ev = on_event or (lambda *a, **k: None)
-    prep = REx._prepare(repo_name, diff)
-    if prep.get("error"):
-        return {"error": prep["error"]}
-    root, scratch = prep["dir"], prep["scratch"]
+    if prepared and prepared.get("dir"):
+        root, scratch, own = prepared["dir"], None, False
+    else:
+        prep = REx._prepare(repo_name, diff)
+        if prep.get("error"):
+            return {"error": prep["error"]}
+        root, scratch, own = prep["dir"], prep["scratch"], True
     try:
         convo = (f"PR in `{repo_name}`. Goal: {(goal or '(none)')[:1500]}\n"
                  f"Changed files: {', '.join(changed_files)}\n\n"
@@ -138,4 +145,5 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
         return {"findings": j.get("findings", []), "summary": j.get("summary", ""),
                 "verdict": j.get("verdict"), "steps": max_steps, "model": model.get("name")}
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        if own and scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
