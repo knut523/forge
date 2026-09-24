@@ -15,6 +15,7 @@ write or push.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -48,30 +49,99 @@ def _clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + f"\n… (clipped, {len(s)} chars)"
 
 
+def _balanced_diff(diff: str, cap: int) -> str:
+    """Give EVERY changed file a share of the budget, not the first-N-files-eat-it-all
+    that a blind truncation does. On a 256k-char / 55-file PR, a flat clip to 45k showed
+    ~12 files and hid 43 — the reason #175 scored 0/14. Here each file's per-file diff
+    section is clipped to an equal slice so all files are visible; the agent reads full
+    context with read_file for anything clipped."""
+    if len(diff) <= cap:
+        return diff
+    parts = re.split(r"(?=^diff --git )", diff, flags=re.M)
+    parts = [p for p in parts if p.strip()]
+    if len(parts) <= 1:
+        return _clip(diff, cap)
+    share = max(1200, cap // len(parts))
+    out = []
+    for p in parts:
+        head = p.split("\n", 1)[0][:200]
+        out.append(p if len(p) <= share
+                   else p[:share] + f"\n… (file section clipped — read_file for full: {head})")
+    joined = "\n".join(out)
+    return joined if len(joined) <= cap * 2 else _clip(joined, cap * 2)
+
+
+_PREFIX = re.compile(r"^/?(home/[^/]+/|work/|repos?/|app/|workspace/|tmp/[^/]+/)+", re.I)
+
+
+def _resolve(root: str, path: str, want: str = "file") -> Path | None:
+    """Map the path a model emitted onto the scratch clone, forgivingly. Models (esp.
+    minimax) hallucinate absolute roots like /home/user/<repo>/src/x — and pathlib's
+    `root / "/abs"` DISCARDS root, so the read escapes the clone and silently fails
+    (this blinded the whole review). Strip hallucinated prefixes and a leading repo
+    segment, then fall back to a basename search inside the tree."""
+    base_root = Path(root).resolve()
+    raw = (path or "").strip().strip('"').strip("'").replace("\\", "/")
+    raw = _PREFIX.sub("", raw).lstrip("/")
+    cands = [raw]
+    if "/" in raw:
+        cands.append(raw.split("/", 1)[1])          # maybe a leading repo-name segment
+    for c in cands:
+        if not c:
+            continue
+        p = (base_root / c).resolve()
+        ok = (p.is_file() if want == "file" else p.is_dir() if want == "dir" else p.exists())
+        if ok and str(p).startswith(str(base_root)):
+            return p
+    name = raw.rsplit("/", 1)[-1]
+    if name and want != "dir":
+        hits = []
+        for q in base_root.rglob(name):
+            sq = str(q)
+            if "/node_modules/" in sq or "/.git/" in sq:
+                continue
+            if q.is_file() and str(q.resolve()).startswith(str(base_root)):
+                hits.append(q)
+            if len(hits) > 40:
+                break
+        if hits:
+            hits.sort(key=lambda q: (0 if str(q).endswith(raw) else 1, len(str(q))))
+            return hits[0]
+    return None
+
+
 def _tool(call: dict, root: str, repo_name: str) -> str:
     t = call.get("tool")
     try:
         if t == "read_file":
-            p = Path(root) / str(call.get("path", ""))
-            if not p.is_file():
-                return f"(no such file: {call.get('path')})"
+            rel = call.get("path") or call.get("file") or call.get("filename") or ""
+            p = _resolve(root, str(rel), "file")
+            if not p:
+                return (f"(no such file: {rel!r}. Paths are relative to the repo root; "
+                        "call list_dir to see the real layout.)")
             lines = p.read_text("utf-8", "replace").splitlines()
-            s = max(0, int(call.get("start", 1)) - 1)
-            e = min(len(lines), int(call.get("end", s + 200)))
-            return _clip("\n".join(f"{i+1}: {lines[i]}" for i in range(s, e)), 6000)
+            s = max(0, int(call.get("start", 1) or 1) - 1)
+            e = min(len(lines), int(call.get("end", s + 200) or s + 200))
+            shown = str(p.relative_to(Path(root).resolve()))
+            body = "\n".join(f"{i+1}: {lines[i]}" for i in range(s, e))
+            return _clip(f"[{shown}]\n{body}", 6000)
         if t == "grep":
             pat = str(call.get("pattern", ""))
-            where = str(Path(root) / str(call.get("path", "")))
-            r = subprocess.run(["grep", "-rn", "-m", "60", "-I", "--", pat, where],
+            dirp = _resolve(root, str(call.get("path", "") or ""), "dir") or Path(root)
+            r = subprocess.run(["grep", "-rn", "-m", "60", "-I",
+                                "--exclude-dir=node_modules", "--exclude-dir=.git",
+                                "--", pat, str(dirp)],
                                capture_output=True, text=True, timeout=25)
-            out = (r.stdout or "").replace(root + "/", "")
+            out = (r.stdout or "").replace(str(Path(root).resolve()) + "/", "")
             return _clip(out or "(no matches)", 4000)
         if t == "list_dir":
-            p = Path(root) / str(call.get("path", ""))
-            if not p.is_dir():
-                return f"(no such dir: {call.get('path')})"
+            rel = str(call.get("path", "") or "")
+            p = _resolve(root, rel, "dir") or (Path(root) if rel in ("", ".", "/") else None)
+            if not p:
+                return f"(no such dir: {rel!r}; try list_dir with an empty path for the root)"
             return _clip("\n".join(sorted(
-                x.name + ("/" if x.is_dir() else "") for x in p.iterdir())), 3000)
+                x.name + ("/" if x.is_dir() else "") for x in p.iterdir()
+                if x.name not in ("node_modules", ".git"))), 3000)
         if t == "run_tests":
             paths = [str(x) for x in (call.get("paths") or [])][:12]
             py = [x for x in paths if x.endswith(".py")]
@@ -96,14 +166,17 @@ def _tool(call: dict, root: str, repo_name: str) -> str:
 
 def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
            changed_files: list[str], goal: str = "", grounding: str = "",
-           max_steps: int = 26, on_event=None, prepared: dict | None = None) -> dict:
+           max_steps: int = 26, on_event=None, prepared: dict | None = None,
+           system_override: str | None = None) -> dict:
     """Run the agentic tool loop with `model`. Returns {findings, summary, verdict, steps}
     or {error}/{why}. Read-only: never writes or pushes.
 
     `prepared` is a {dir, scratch} from review_exec.prepare_pr — a clean checkout of the
     PR's real head branch (the robust source the caller owns and cleans up). Without it,
-    the diff is patched onto the default clone (fails when the base diverged)."""
+    the diff is patched onto the default clone (fails when the base diverged).
+    `system_override` swaps the reviewer persona (used by the adversarial BREAK pass)."""
     ev = on_event or (lambda *a, **k: None)
+    sys_prompt = system_override or SYSTEM
     if prepared and prepared.get("dir"):
         root, scratch, own = prepared["dir"], None, False
     else:
@@ -111,15 +184,33 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
         if prep.get("error"):
             return {"error": prep["error"]}
         root, scratch, own = prep["dir"], prep["scratch"], True
+    # Scale the investigation budget to PR size — a 55-file PR cannot be reviewed in the
+    # 26 steps that suit a 3-file one (the other half of why #175 scored 0/14).
+    nfiles = len([f for f in changed_files if f])
+    max_steps = max(max_steps, min(46, 22 + nfiles // 2))
     try:
+        # Seed the real repo layout so the model emits paths that actually resolve
+        # (models otherwise guess /home/user/<repo>/… which escapes the clone).
+        try:
+            top = sorted(x.name + ("/" if x.is_dir() else "") for x in Path(root).iterdir()
+                         if x.name not in ("node_modules", ".git"))
+            tree = "Repo root contents (paths you pass are relative to THIS root):\n" + \
+                   ", ".join(top[:60]) + "\n\n"
+        except Exception:
+            tree = ""
+        flist = ", ".join(changed_files)
         convo = (f"PR in `{repo_name}`. Goal: {(goal or '(none)')[:1500]}\n"
-                 f"Changed files: {', '.join(changed_files)}\n\n"
+                 f"Changed files ({nfiles}) — you MUST account for every one of them: {flist}\n\n"
+                 + tree
                  + (grounding[:8000] + "\n\n" if grounding else "")
-                 + f"Unified diff:\n{_clip(diff, 45000)}\n\n"
-                 "Begin. Read the changed files, check callers, run the touched tests, "
-                 "then give your verdict. Emit ONE JSON action now.")
+                 + f"Unified diff (per-file; large files are clipped — use read_file to see "
+                   f"full context, do NOT skip a file because its diff is clipped):\n"
+                 + f"{_balanced_diff(diff, 60000)}\n\n"
+                 "Begin. Work through ALL changed files: read each one and the code around it, "
+                 "check callers, run the touched tests, then give your verdict covering the "
+                 "whole PR. Emit ONE JSON action now.")
         for step in range(max_steps):
-            text, meta = llm.complete(model, token, SYSTEM, convo, max_tokens=1600)
+            text, meta = llm.complete(model, token, sys_prompt, convo, max_tokens=1600)
             if text is None:
                 return {"error": meta.get("error", "model call failed")}
             call = _extract_json(text) or {}
@@ -144,7 +235,7 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
             convo += f"\n\nYOU: {json.dumps(call)}\nRESULT:\n{result}\n\nNext action (one JSON):"
         # out of steps — force a verdict from everything seen so far
         text, _ = llm.complete(model, token,
-                               SYSTEM + "\n\nYou are out of investigation steps. Emit your "
+                               sys_prompt + "\n\nYou are out of investigation steps. Emit your "
                                "done verdict JSON NOW based on what you have seen.",
                                convo, max_tokens=1600)
         j = _extract_json(text or "") or {}

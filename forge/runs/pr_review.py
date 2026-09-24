@@ -25,6 +25,7 @@ from . import review_grounding as RG
 from . import review_exec as REx
 from . import review_sast as SAST
 from . import review_agent as AGENT
+from . import review_adversarial as ADV
 from .engine import _extract_json
 
 # Modern review models carry large context, so the budget should hold a real
@@ -293,7 +294,7 @@ def _draft(owner: str, repo: str, number: int, review: dict, meta: dict,
 
 def review(cfg: ConfigStore, owner: str, repo: str, number: int,
            read_token: str | None, index_store, local_repo: str | None,
-           mode: str = "light", on_event=None) -> dict:
+           mode: str = "light", on_event=None, review_model: str | None = None) -> dict:
     """(findings, draft, ...) — or {'error'/'why'}. Read-only: never posts.
 
     on_event(phase, kind, title[, detail]) is called at each step so a run can
@@ -368,6 +369,30 @@ def review(cfg: ConfigStore, owner: str, repo: str, number: int,
         review_obj = {"summary": ao.get("summary", ""), "findings": ao.get("findings", []),
                       "verdict": ao.get("verdict")}
         meta = {"mode": "agentic", "finders": [rm["name"]], "steps": ao.get("steps")}
+    elif mode == "adversarial":
+        # The strongest form: an agentic BREAK pass (hostile brief) then a REFUTE pass that
+        # tries to disprove each finding — plan-to-pr's try-to-break-it discipline. Model
+        # chosen by `review_model` override (the coder×reviewer matrix), else strongest.
+        rm = next((m for m in models if m["name"] == review_model), models[0]) if review_model else models[0]
+        ev("adv", "info", f"adversarial review with {rm['name']} — BREAK then REFUTE")
+        prepared = REx.prepare_pr(local_repo, f"{owner}/{repo}", number, read_token) if local_repo else {}
+        if prepared.get("error"):
+            ev("adv", "info", f"clean PR clone unavailable ({prepared['error']}); using diff")
+            prepared = None
+        try:
+            ao = ADV.review(cfg, rm, _tok(cfg, rm), local_repo, diff, changed,
+                            goal=(pr.get("title") or ""), grounding=g["block"],
+                            on_event=ev, prepared=prepared)
+        finally:
+            if prepared and prepared.get("scratch"):
+                import shutil as _sh
+                _sh.rmtree(prepared["scratch"], ignore_errors=True)
+        if ao.get("error"):
+            return {"error": ao["error"]}
+        review_obj = {"summary": ao.get("summary", ""), "findings": ao.get("findings", []),
+                      "verdict": ao.get("verdict")}
+        meta = {"mode": "adversarial", "finders": [rm["name"]], "steps": ao.get("steps"),
+                "candidates": ao.get("candidates")}
     elif mode == "full":
         finders = models[:2]                       # up to 2 distinct models
         ev("find", "info", f"{len(finders)} finder model(s): "
