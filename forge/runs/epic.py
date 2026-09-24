@@ -26,6 +26,7 @@ from ..indexer import query as Q
 from ..indexer import wayfinder as W
 from ..indexer.store import Store as IndexStore
 from . import engine as RunEngine
+from . import council as Council
 from .ship import branch_name
 from .memory import MemoryStore
 from .store import RunStore
@@ -326,6 +327,31 @@ def execute(epic_id: str, index_db: str) -> None:
         assessment = _assess(rs, epic_id, cfg, items, repos)
         items = assessment["items"]        # the trimmed set the sceptic left standing
 
+        # Council plan-review: before a human approves the split, a model panel judges
+        # whether the PLAN actually serves the goal (missing requirements, overbuild,
+        # wrong approach) — plan-to-pr's spec sign-off as a gate. Advisory to the human,
+        # not an auto-block; surfaced in the approval card. Best-effort.
+        council = None
+        try:
+            plan_text = "\n".join(
+                f"{i+1}. [{it.get('repo','')}] {it.get('title','(untitled)')} — "
+                f"{str(it.get('rationale') or it.get('description') or '')[:300]}"
+                for i, it in enumerate(items))
+            rs.emit(epic_id, "council", "step", "Council reviewing the plan")
+            council = Council.plan_review(
+                cfg, epic["goal"], plan_text,
+                on_event=lambda ph, k, t, d=None: rs.emit(epic_id, "council", "info", t))
+            rs.emit(epic_id, "council", "done",
+                    f"Council: {council.get('verdict')}",
+                    {"verdict": council.get("verdict"),
+                     "must_fix": council.get("must_fix", []),
+                     "should_fix": council.get("should_fix", []),
+                     "summary": council.get("summary", ""),
+                     "panel": council.get("panel", [])})
+        except Exception as e:
+            rs.emit(epic_id, "council", "warn",
+                    f"Council review skipped: {type(e).__name__}", level="warn")
+
         rs.clear_items(epic_id)
         for i, it in enumerate(items):
             iid = rs.add_item(epic_id, i, it)
@@ -333,11 +359,14 @@ def execute(epic_id: str, index_db: str) -> None:
                      or i in (p.get("items") or [])]
             rs.set_item(iid, assessment={"verdict": None, "problems": probs})
 
-        rs.set_state(epic_id, {"repos": repos, "facts": facts[:20000]})
+        rs.set_state(epic_id, {"repos": repos, "facts": facts[:20000],
+                               "council": council})
         rs.set_phase(epic_id, "approve")
         rs.emit(epic_id, "approve", "info", "Waiting for you to approve the split",
                 {"pull_requests": len(items),
                  "structural_problems": len(assessment["problems"]),
+                 "council_verdict": (council or {}).get("verdict"),
+                 "council_must_fix": (council or {}).get("must_fix", []),
                  "note": "No code has been written. Approving runs each item as "
                          "its own change, and each one still stops for your "
                          "review before its PR is opened."})

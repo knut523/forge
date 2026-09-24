@@ -20,7 +20,12 @@ import json
 
 from ..config import llm
 from ..config.store import ConfigStore
-from .engine import _extract_json
+
+
+def _extract_json(text):
+    # Lazy import — engine imports council, so a top-level import here would be circular.
+    from .engine import _extract_json as _ej
+    return _ej(text)
 
 COUNCILLOR_SYSTEM = (
     "You are ONE member of a software review council with an independent vote. Judge the "

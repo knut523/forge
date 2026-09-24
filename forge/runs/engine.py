@@ -22,6 +22,7 @@ from ..config.store import GITHUB_WRITE, ConfigStore
 from ..config import llm
 from ..config import providers
 from . import ship
+from . import council as Council
 from .memory import (MemoryStore, harvest_conventions, remember_verify_problems)
 from ..indexer import query as Q
 from ..indexer import wayfinder as W
@@ -674,8 +675,32 @@ def execute(run_id: str, index_db: str) -> None:
             feedback = _revise_feedback(reviewed["diffs"], blocking)
 
         review_out["auto_revised"] = rounds - 1
+
+        # Intent check: the review says whether the code is correct; the council says
+        # whether it serves the REASON it was built. A change can pass review and still
+        # solve the wrong problem — this is the gate that catches that. Advisory, shown
+        # at the approval gate. Best-effort.
+        intent = None
+        try:
+            built_summary = "; ".join(
+                f"{w.get('change','?')} {w.get('path')}" for w in built.get("files", [])[:20]) \
+                or "(no files reported)"
+            evidence = (f"review verdict: {review_out.get('verdict')}; "
+                        f"blocking findings left: {len(blocking)}; "
+                        f"files: {reviewed.get('additions',0)}+/{reviewed.get('deletions',0)}-")
+            intent = Council.intent_check(
+                cfg, goal, built_summary, evidence,
+                on_event=lambda ph, k, t, d=None: rs.emit(run_id, "intent", "info", t))
+            rs.emit(run_id, "intent", "done", f"Intent check: {intent.get('verdict')}",
+                    {"verdict": intent.get("verdict"),
+                     "must_fix": intent.get("must_fix", []),
+                     "summary": intent.get("summary", "")})
+        except Exception as e:
+            rs.emit(run_id, "intent", "warn",
+                    f"Intent check skipped: {type(e).__name__}", level="warn")
+
         rs.set_state(run_id, {"built": built, "reviewed": reviewed,
-                              "origin": origin, "review": review_out})
+                              "origin": origin, "review": review_out, "intent": intent})
 
         # The run STOPS here. The PR phase is not reachable by falling through;
         # it runs only from an explicit approve call, which is what makes
@@ -687,6 +712,8 @@ def execute(run_id: str, index_db: str) -> None:
                  "deletions": reviewed["deletions"],
                  "review_findings": len(review_out.get("findings") or []),
                  "review_verdict": review_out.get("verdict"),
+                 "intent_verdict": (intent or {}).get("verdict"),
+                 "intent_must_fix": (intent or {}).get("must_fix", []),
                  "auto_revised": rounds - 1,
                  "github_target": origin or "none — this repo has no GitHub origin"})
         rs.finish(run_id, "awaiting_approval",
