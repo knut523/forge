@@ -213,14 +213,18 @@ def models_list():
 class ChatIn(BaseModel):
     messages: list[dict] = []
     model: str | None = None
+    repo: str | None = None
 
 
 @app.post("/api/chat")
 def chat(body: ChatIn):
-    """A plain multi-turn chat in the forge UI, on forge's own models. Not the
-    build pipeline — just a conversation (no structured-output requirement), so it
-    works cleanly on the Claude session bridge or any configured model."""
+    """Grounded multi-turn chat in the forge UI. Unlike a naked LLM, it retrieves
+    matching code, past review comments and memory from forge's index and answers with
+    that context (best-effort; falls back to a plain answer). Model-agnostic — works on
+    the Claude bridge or any configured model."""
+    from ..runs import chat as Chat
     c = _cfg()
+    store = None
     try:
         models = [m for m in c.list_models() if m["enabled"]]
         if not models:
@@ -233,17 +237,18 @@ def chat(body: ChatIn):
         if chosen["secret_key"] and token is None:
             raise HTTPException(status_code=400,
                                 detail=f"credential {chosen['secret_key']!r} is not set")
-        msgs = body.messages or []
-        system = "\n\n".join(m.get("content", "") for m in msgs
-                             if m.get("role") == "system") or "You are a helpful assistant."
-        convo = "\n\n".join(f'{m.get("role", "user").upper()}: {m.get("content", "")}'
-                            for m in msgs if m.get("role") != "system")
-        text, meta = llm.complete(chosen, token, system, convo, max_tokens=2000)
-        if text is None:
+        try:
+            store = _store()
+        except Exception:
+            store = None
+        out = Chat.answer(c, store, body.messages or [], chosen, token, repo=body.repo)
+        if out.get("text") is None:
             raise HTTPException(status_code=502,
-                                detail=f"the model failed: {meta.get('error')}")
-        return {"text": text, "model": chosen["name"]}
+                                detail=f"the model failed: {out.get('error')}")
+        return {"text": out["text"], "model": out["model"], "grounded": out["grounded"]}
     finally:
+        if store is not None:
+            store.close()
         c.close()
 
 
