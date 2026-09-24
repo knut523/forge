@@ -55,13 +55,17 @@ class Handler(BaseHTTPRequestHandler):
         if not prompt:
             return self._json(400, {"error": "prompt required"})
 
-        cmd = [CLAUDE, "-p", prompt, "--disallowed-tools", *BLOCKED]
+        # The prompt goes on STDIN, not argv: a large review context (a whole PR
+        # diff) is hundreds of KB and would overflow ARG_MAX ("Argument list too
+        # long") if passed as `-p <prompt>`. `claude -p` with no positional prompt
+        # reads the prompt from stdin.
+        cmd = [CLAUDE, "-p", "--disallowed-tools", *BLOCKED]
         if body.get("system"):
             cmd += ["--append-system-prompt", str(body["system"])]
         if body.get("model"):
             cmd += ["--model", str(body["model"])]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True,
+            r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
                                timeout=int(body.get("timeout", 600)),
                                env={**os.environ, "HOME": "/home/coder"})
         except subprocess.TimeoutExpired:

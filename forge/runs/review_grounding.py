@@ -191,17 +191,22 @@ def reachability(diff: str, repo_name: str | None, changed_files: list[str]) -> 
         diff_callers = [f for f in changed
                         if f != deffile and not _is_test_path(f)
                         and _mentions_in_diff(diff, f, name)]
-        if not base_refs and not diff_callers:
+        # used WITHIN its own module (an internal helper is not dead code, even if the
+        # base clone does not have the new file yet). Only a symbol used nowhere — not
+        # internally, not by a sibling changed file, not in the base — is an orphan.
+        intra = _mentions_in_diff(diff, deffile, name)
+        if not base_refs and not diff_callers and not intra:
             findings.append({
                 "severity": "high",
                 "file": deffile,
-                "detail": (f"`{name}` is defined here but nothing calls it — not in "
-                           f"the clone (git grep finds only its own file/tests) and "
-                           f"not elsewhere in this PR. If an acceptance criterion says "
-                           f"this produces output, it cannot be met: there is no caller. "
-                           f"Add the wiring (route/script/caller) or the feature is dead code."),
+                "detail": (f"`{name}` is defined here but nothing calls it — not within "
+                           f"its own module, not by another file in this PR, and not in "
+                           f"the clone (git grep finds only its own file/tests). If an "
+                           f"acceptance criterion says this produces output, it cannot be "
+                           f"met: there is no caller. Add the wiring (route/script/caller) "
+                           f"or it is dead code."),
                 "angle": "reachability",
-                "confidence": 85,
+                "confidence": 80,
                 "verdict": "confirmed",
                 "seed": True,
             })
