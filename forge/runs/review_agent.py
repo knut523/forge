@@ -209,6 +209,13 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
                  "Begin. Work through ALL changed files: read each one and the code around it, "
                  "check callers, run the touched tests, then give your verdict covering the "
                  "whole PR. Emit ONE JSON action now.")
+        # Investigation floor: a model must not conclude on a big PR after skimming a
+        # handful of files (claude tried to finish #175 in 6 steps over 55 files). Require
+        # a minimum number of distinct files read before a verdict is accepted; push back
+        # a bounded number of times so it can't be gamed and can't loop forever.
+        floor = min(nfiles, 10) if nfiles > 6 else max(1, nfiles - 1)
+        read_paths: set[str] = set()
+        pushbacks = 0
         for step in range(max_steps):
             text, meta = llm.complete(model, token, sys_prompt, convo, max_tokens=1600)
             if text is None:
@@ -220,12 +227,29 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
             # nominally "going" produced an empty None verdict — fixed here.
             is_verdict = (call.get("done") or "findings" in call) and not call.get("tool")
             if is_verdict:
+                if len(read_paths) < floor and pushbacks < 3 and step < max_steps - 2:
+                    pushbacks += 1
+                    unread = [f for f in changed_files
+                              if not any(f.endswith(rp) or rp.endswith(f.rsplit("/", 1)[-1])
+                                         for rp in read_paths)][:8]
+                    ev("agent", "info",
+                       f"floor: read {len(read_paths)}/{floor} files — pushing to investigate more")
+                    convo += (f"\n\nYOU tried to conclude, but you have only examined "
+                              f"{len(read_paths)} of {nfiles} changed files. Do NOT conclude yet. "
+                              f"Read these still-unexamined changed files and check their behaviour "
+                              f"first: {', '.join(unread) or '(the remaining changed files)'}. "
+                              "Emit ONE tool call now.")
+                    continue
                 ev("agent", "info", f"done after {step+1} step(s)")
                 return {"findings": call.get("findings", []),
                         "summary": call.get("summary", ""),
                         "verdict": call.get("verdict") or (
                             "changes-requested" if call.get("findings") else "pass"),
                         "steps": step + 1, "model": model.get("name")}
+            if call.get("tool") == "read_file":
+                rp = str(call.get("path") or call.get("file") or "").strip()
+                if rp:
+                    read_paths.add(rp)
             if not call.get("tool"):
                 convo += (f"\n\nYOU: {text.strip()[:400]}\n(That was not a valid action. "
                           "Emit ONE JSON: a tool call, or your done verdict with findings.)")

@@ -45,13 +45,15 @@ BREAK_SYSTEM = (
 )
 
 REFUTE_SYSTEM = (
-    "You are an adversarial VERIFIER. You are given a PR and a candidate finding. Try "
-    "to REFUTE it: is it factually wrong (quote the actual line), provably impossible, "
-    "already handled elsewhere in the diff, an intentional design choice the PR states, "
-    "or outside the acceptance criteria? Use your tools to check the code. Decide "
-    "CONFIRMED (real defect), PLAUSIBLE (real on a realistic path), or REFUTED. Assign "
-    "confidence 0-100. Respond with ONLY JSON:\n"
-    '{"verdict":"confirmed|plausible|refuted","confidence":0,"reason":"..."}'
+    "You are a VERIFIER. You are given a PR and a candidate finding. Decide whether it is "
+    "real — but be RECALL-BIASED, the same discipline a careful human review uses: default "
+    "to PLAUSIBLE, and only REFUTE when the finding is CONSTRUCTIBLY wrong. REFUTED requires "
+    "one of: it is factually wrong (quote the actual contradicting line), provably impossible "
+    "(cite the type/constant/guard), already handled elsewhere in the diff (cite it), or an "
+    "intentional choice the PR explicitly documents (quote it). 'Seems unlikely', 'depends on "
+    "runtime state', or 'probably fine' is NOT grounds to refute — those are PLAUSIBLE. Mark "
+    "CONFIRMED when you can show the concrete trigger. Respond with ONLY JSON:\n"
+    '{"verdict":"confirmed|plausible|refuted","confidence":0,"reason":"cite the code"}'
 )
 
 
