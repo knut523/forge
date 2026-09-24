@@ -17,7 +17,7 @@ Two deliberate restrictions:
 import json
 import os
 import subprocess
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = os.environ.get("SHIM_TOKEN", "")
 CLAUDE = os.environ.get("CLAUDE_BIN", "/usr/local/bin/claude")
@@ -31,11 +31,15 @@ BLOCKED = ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch",
 class Handler(BaseHTTPRequestHandler):
     def _json(self, code, obj):
         raw = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            # a client that timed out and hung up must not crash the server
+            pass
 
     def do_GET(self):
         if self.path == "/health":
@@ -81,4 +85,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    srv.daemon_threads = True          # a slow/dead client can't pin a worker
+    srv.serve_forever()
