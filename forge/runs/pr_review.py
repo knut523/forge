@@ -23,6 +23,7 @@ from ..config.store import ConfigStore
 from ..indexer import prs as PRs
 from . import review_grounding as RG
 from . import review_exec as REx
+from . import review_sast as SAST
 from .engine import _extract_json
 
 # Modern review models carry large context, so the budget should hold a real
@@ -323,6 +324,10 @@ def review(cfg: ConfigStore, owner: str, repo: str, number: int,
         if xr.get("seeds"):
             g["seeds"] = g.get("seeds", []) + xr["seeds"]
         ev("exec", "info", "ran touched tests: " + (xr.get("note") or xr.get("why") or "—"))
+        sx = SAST.scan(local_repo, diff, changed)
+        if sx.get("seeds"):
+            g["seeds"] = g.get("seeds", []) + sx["seeds"]
+        ev("sast", "info", "SAST: " + (sx.get("note") or sx.get("why") or "—"))
     gnote = []
     if g["acceptance"]["criteria"]:
         gnote.append(f"{len(g['acceptance']['criteria'])} acceptance criterion/-a")
@@ -403,10 +408,15 @@ def review_built(cfg: ConfigStore, repo: str, goal: str, diffs: list[dict],
     if len(diff) > _DIFF_CAP:
         diff = diff[:_DIFF_CAP] + f"\n\n… diff truncated at {_DIFF_CAP // 1000}k chars …"
     g = RG.build(repo, goal, diff, changed, memory_block=_memory_block(repo, changed))
-    xr = REx.run_tests(repo, "\n".join(d.get("diff", "") for d in diffs), changed)
+    exec_diff = "\n".join(d.get("diff", "") for d in diffs)
+    xr = REx.run_tests(repo, exec_diff, changed)
     if xr.get("seeds"):
         g["seeds"] = g.get("seeds", []) + xr["seeds"]
     ev("review", "info", "ran touched tests: " + (xr.get("note") or xr.get("why") or "—"))
+    sx = SAST.scan(repo, exec_diff, changed)
+    if sx.get("seeds"):
+        g["seeds"] = g.get("seeds", []) + sx["seeds"]
+    ev("review", "info", "SAST: " + (sx.get("note") or sx.get("why") or "—"))
     base = (f"Change under review in {repo} (a locally-built change, not yet a PR).\n"
             f"Goal: {goal}\n\nforge cross-repo impact:\n{impact_note or '(none)'}\n\n"
             + (g["block"] + "\n\n" if g["block"] else "")
