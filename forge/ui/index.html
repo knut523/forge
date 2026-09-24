@@ -861,15 +861,17 @@ function renderTree(list, runs, runById, epics, epicItems, attn){
   }
 }
 
-function bucketOf(st){                              // map every run status onto the three kanban lanes
-  if(st==='complete') return 'done';
+const PLAN_PHASES = ['plan','classify','decompose','assess','planning','spec'];
+function bucketOf(st, phase){                       // map every run status+phase onto the four lanes
+  if(st==='complete' || st==='rejected') return 'done';   // rejected is done — just not merged
+  if(PLAN_PHASES.includes(phase)) return 'plan';          // still being scoped/decomposed
   if(!st || st==='pending' || st==='queued' || st==='not_started') return 'todo';
-  return 'doing';   // running, review, awaiting_approval, blocked, failed, rejected, incomplete
+  return 'doing';   // running, build, verify, review, approve, awaiting_approval, blocked, failed, incomplete
 }
 function epicBucket(ep, items, runById){            // an epic's lane follows its steps' progress
-  if(!items.length) return bucketOf(ep.status);
+  if(!items.length) return bucketOf(ep.status, ep.phase);
   const sts = items.map(it=>{ const cr=it.run_id&&runById[it.run_id]; return cr?cr.status:it.status; });
-  if(sts.every(s=>s==='complete')) return 'done';
+  if(sts.every(s=>s==='complete'||s==='rejected')) return 'done';
   if(sts.some(s=>s && !['pending','queued','not_started'].includes(s))) return 'doing';
   return 'todo';
 }
@@ -878,34 +880,34 @@ function renderBoard(list, runs, runById, epics, epicItems){
   if(BOARD_LEVEL==='epic'){                          // one card per feature (epic)
     for(const ep of epics){
       const items = epicItems[ep.id]||[];
-      const done = items.filter(it=>{ const cr=it.run_id&&runById[it.run_id]; return (cr?cr.status:it.status)==='complete'; }).length;
+      const done = items.filter(it=>{ const cr=it.run_id&&runById[it.run_id]; const s=(cr?cr.status:it.status); return s==='complete'||s==='rejected'; }).length;
       cards.push({id:ep.id, title:ep.goal.split('\n')[0], repo:ep.repo, status:ep.status,
                   bucket:epicBucket(ep, items, runById),
                   meta:(items.length?`${done}/${items.length} steps`:'feature')});
     }
     for(const r of runs.filter(r=>r.kind!=='epic' && !r.parent_id))
       cards.push({id:r.id, title:r.goal.split('\n')[0], repo:r.repo, status:r.status,
-                  bucket:bucketOf(r.status), meta:(r.pr_url?'PR ✓':'single change')});
+                  bucket:bucketOf(r.status, r.phase), meta:(r.pr_url?'PR ✓':r.status==='rejected'?'rejected':'single change')});
   } else {                                           // one card per subtask
     for(const ep of epics){
       const eg = ep.goal.split('\n')[0].slice(0,32);
       for(const it of (epicItems[ep.id]||[])){
         const rid = it.run_id, cr = rid && runById[rid];
-        const st = cr?cr.status:it.status;
+        const st = cr?cr.status:it.status, ph = cr?cr.phase:null;
         cards.push({id:rid, title:`#${it.seq+1} ${it.title}`, repo:it.repo, status:st,
-                    bucket:bucketOf(st),
-                    meta:'↳ '+eg+(st==='awaiting_approval'?' · approve':'')+((cr&&cr.pr_url)?' · PR ✓':'')});
+                    bucket:bucketOf(st, ph),
+                    meta:'↳ '+eg+(st==='awaiting_approval'?' · approve':'')+(st==='rejected'?' · rejected':'')+((cr&&cr.pr_url)?' · PR ✓':'')});
       }
     }
     for(const r of runs.filter(r=>r.kind!=='epic' && !r.parent_id))
       cards.push({id:r.id, title:r.goal.split('\n')[0], repo:r.repo, status:r.status,
-                  bucket:bucketOf(r.status), meta:(r.pr_url?'PR ✓':'single change')});
+                  bucket:bucketOf(r.status, r.phase), meta:(r.pr_url?'PR ✓':r.status==='rejected'?'rejected':'single change')});
   }
-  const cols = {todo:[], doing:[], done:[]};
+  const cols = {plan:[], todo:[], doing:[], done:[]};
   cards.forEach(c=>cols[c.bucket].push(c));
-  const labels = {todo:'To do', doing:'In progress', done:'Done'};
+  const labels = {plan:'Plan', todo:'To do', doing:'In progress', done:'Done'};
   const board = el(`<div class="kanban"></div>`);
-  ['todo','doing','done'].forEach(k=>{
+  ['plan','todo','doing','done'].forEach(k=>{
     const col = el(`<div class="kcol"><div class="khead">${labels[k]} · ${cols[k].length}</div></div>`);
     cols[k].forEach(c=>{
       const card = el(`<div class="kcard${CUR===c.id?' sel':''}">
