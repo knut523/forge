@@ -52,8 +52,8 @@ def _complete_once(model: dict, token: str | None, system: str, user: str,
             # "Argument list too long". Keep the bridge prompt under that here; the
             # HTTP-API providers below have no such limit and get the full context.
             u = user
-            if len(u) > 118000:
-                u = (u[:118000] + "\n\n… context truncated to fit the session bridge; "
+            if len(u) > 290000:
+                u = (u[:290000] + "\n\n… context truncated to fit the session bridge; "
                      "review the rest directly …")
             with httpx.Client(timeout=420.0) as c:
                 r = c.post(base or "http://ide:8930/",
