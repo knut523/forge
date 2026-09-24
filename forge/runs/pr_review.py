@@ -21,6 +21,7 @@ from ..config import llm
 from ..config.store import ConfigStore
 from ..indexer import prs as PRs
 from . import review_grounding as RG
+from . import review_exec as REx
 from .engine import _extract_json
 
 # Big enough to cover a real feature PR whole (a 54-file olaf change is ~50k
@@ -263,6 +264,11 @@ def review(cfg: ConfigStore, owner: str, repo: str, number: int,
     changed = [f.get("path") for f in pr.get("files", []) if f.get("path")]
     g = RG.build(local_repo, pr.get("body", ""), diff, changed,
                  memory_block=_memory_block(local_repo, changed))
+    if local_repo:
+        xr = REx.run_tests(local_repo, diff, changed)
+        if xr.get("seeds"):
+            g["seeds"] = g.get("seeds", []) + xr["seeds"]
+        ev("exec", "info", "ran touched tests: " + (xr.get("note") or xr.get("why") or "—"))
     gnote = []
     if g["acceptance"]["criteria"]:
         gnote.append(f"{len(g['acceptance']['criteria'])} acceptance criterion/-a")
@@ -343,6 +349,10 @@ def review_built(cfg: ConfigStore, repo: str, goal: str, diffs: list[dict],
     if len(diff) > _DIFF_CAP:
         diff = diff[:_DIFF_CAP] + f"\n\n… diff truncated at {_DIFF_CAP} chars …"
     g = RG.build(repo, goal, diff, changed, memory_block=_memory_block(repo, changed))
+    xr = REx.run_tests(repo, "\n".join(d.get("diff", "") for d in diffs), changed)
+    if xr.get("seeds"):
+        g["seeds"] = g.get("seeds", []) + xr["seeds"]
+    ev("review", "info", "ran touched tests: " + (xr.get("note") or xr.get("why") or "—"))
     base = (f"Change under review in {repo} (a locally-built change, not yet a PR).\n"
             f"Goal: {goal}\n\nforge cross-repo impact:\n{impact_note or '(none)'}\n\n"
             + (g["block"] + "\n\n" if g["block"] else "")
