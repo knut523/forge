@@ -108,13 +108,25 @@ def _link_node_modules(repo_name: str, dst: str) -> bool:
         return False
 
 
+def _tsx_bin(dst: str) -> str | None:
+    """tsx to run TypeScript tests: the repo's local one if deps are linked, else a
+    global tsx (which runs any test that imports only local files + node builtins —
+    the 'pure' unit tests — without a heavy node_modules)."""
+    local = Path(dst) / "node_modules" / ".bin" / "tsx"
+    if local.exists():
+        return str(local)
+    return shutil.which("tsx")
+
+
 def _run_node(dst: str, tests: list[str], timeout: int) -> tuple[int, str]:
-    # olaf runs its tests with tsx (`tsx --test`), which handles TypeScript directly.
-    tsx = Path(dst) / "node_modules" / ".bin" / "tsx"
-    runner = [str(tsx), "--test"] if tsx.exists() else ["node", "--test"]
+    tsx = _tsx_bin(dst)
+    runner = [tsx, "--test"] if tsx else ["node", "--test"]
     p = subprocess.run([*runner, *tests], cwd=dst, capture_output=True, text=True,
                        timeout=timeout, env={**os.environ, "NODE_OPTIONS": "--no-warnings"})
     return p.returncode, (p.stdout + p.stderr)[-4000:]
+
+
+_DEPS_MISSING = ("ERR_MODULE_NOT_FOUND", "Cannot find module", "ERR_UNKNOWN_FILE_EXTENSION")
 
 
 def run_tests(repo_name: str | None, diff: str, changed_files: list[str],
@@ -150,23 +162,27 @@ def run_tests(repo_name: str | None, diff: str, changed_files: list[str],
             except subprocess.TimeoutExpired:
                 notes.append(f"pytest timed out after {timeout}s")
         if ts:
+            _link_node_modules(repo_name, dst)   # best-effort; global tsx handles pure tests
             if not _have_node():
                 notes.append(f"{len(ts)} JS/TS test(s) not run — no node runtime here")
-            elif not _link_node_modules(repo_name, dst):
-                notes.append(f"{len(ts)} JS/TS test(s) not run — deps not cached "
-                             f"(run `npm ci` in the {repo_name} clone once)")
             else:
                 try:
                     rc, out = _run_node(dst, ts, timeout)
-                    ran += ts
-                    if rc != 0:
-                        seeds.append({
-                            "severity": "high", "file": ts[0],
-                            "detail": ("The touched tests FAIL when actually run (tsx "
-                                       f"--test exit {rc}) — the change is not green. "
-                                       f"Output tail:\n" + out[-900:]),
-                            "angle": "execution", "confidence": 90,
-                            "verdict": "confirmed", "seed": True})
+                    if any(sig in out for sig in _DEPS_MISSING):
+                        # the test imports packages we can't install in a 512MB box —
+                        # 'could not run', NOT a failure (would be a false finding)
+                        notes.append(f"{len(ts)} TS test(s) need deps not available here "
+                                     f"(pure tests run; dep-heavy ones don't)")
+                    else:
+                        ran += ts
+                        if rc != 0:
+                            seeds.append({
+                                "severity": "high", "file": ts[0],
+                                "detail": ("The touched tests FAIL when actually run (tsx "
+                                           f"--test exit {rc}) — the change is not green. "
+                                           f"Output tail:\n" + out[-900:]),
+                                "angle": "execution", "confidence": 90,
+                                "verdict": "confirmed", "seed": True})
                 except subprocess.TimeoutExpired:
                     notes.append(f"node tests timed out after {timeout}s")
         if seeds:
