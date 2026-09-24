@@ -91,9 +91,29 @@ def _have_node() -> bool:
     return shutil.which("node") is not None
 
 
+def _link_node_modules(repo_name: str, dst: str) -> bool:
+    """Symlink the repo's cached node_modules (from the /work clone, installed once
+    via `npm ci`) into the scratch, so a TS test's imports resolve without a per-review
+    install. Returns True if deps are available."""
+    src = Path(WORK) / repo_name / "node_modules"
+    if not src.is_dir():
+        return False
+    link = Path(dst) / "node_modules"
+    if link.exists() or link.is_symlink():
+        return True
+    try:
+        link.symlink_to(src)
+        return True
+    except Exception:
+        return False
+
+
 def _run_node(dst: str, tests: list[str], timeout: int) -> tuple[int, str]:
-    p = subprocess.run(["node", "--test", *tests], cwd=dst, capture_output=True,
-                       text=True, timeout=timeout)
+    # olaf runs its tests with tsx (`tsx --test`), which handles TypeScript directly.
+    tsx = Path(dst) / "node_modules" / ".bin" / "tsx"
+    runner = [str(tsx), "--test"] if tsx.exists() else ["node", "--test"]
+    p = subprocess.run([*runner, *tests], cwd=dst, capture_output=True, text=True,
+                       timeout=timeout, env={**os.environ, "NODE_OPTIONS": "--no-warnings"})
     return p.returncode, (p.stdout + p.stderr)[-4000:]
 
 
@@ -130,21 +150,25 @@ def run_tests(repo_name: str | None, diff: str, changed_files: list[str],
             except subprocess.TimeoutExpired:
                 notes.append(f"pytest timed out after {timeout}s")
         if ts:
-            if _have_node():
+            if not _have_node():
+                notes.append(f"{len(ts)} JS/TS test(s) not run — no node runtime here")
+            elif not _link_node_modules(repo_name, dst):
+                notes.append(f"{len(ts)} JS/TS test(s) not run — deps not cached "
+                             f"(run `npm ci` in the {repo_name} clone once)")
+            else:
                 try:
                     rc, out = _run_node(dst, ts, timeout)
                     ran += ts
                     if rc != 0:
                         seeds.append({
                             "severity": "high", "file": ts[0],
-                            "detail": ("The touched tests FAIL when actually run (node "
-                                       f"--test exit {rc}). Output tail:\n" + out[-900:]),
+                            "detail": ("The touched tests FAIL when actually run (tsx "
+                                       f"--test exit {rc}) — the change is not green. "
+                                       f"Output tail:\n" + out[-900:]),
                             "angle": "execution", "confidence": 90,
                             "verdict": "confirmed", "seed": True})
                 except subprocess.TimeoutExpired:
                     notes.append(f"node tests timed out after {timeout}s")
-            else:
-                notes.append(f"{len(ts)} JS/TS test(s) not run — no node runtime here")
         if seeds:
             note = f"{len(seeds)} touched test file(s) FAILED when run"
         elif notes:
