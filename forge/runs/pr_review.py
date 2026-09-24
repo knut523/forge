@@ -24,6 +24,7 @@ from ..indexer import prs as PRs
 from . import review_grounding as RG
 from . import review_exec as REx
 from . import review_sast as SAST
+from . import review_agent as AGENT
 from .engine import _extract_json
 
 # Modern review models carry large context, so the budget should hold a real
@@ -342,7 +343,20 @@ def review(cfg: ConfigStore, owner: str, repo: str, number: int,
        + (f" · grounding: {', '.join(gnote)}" if gnote else ""))
     base = _context(pr, owner, repo, number, impact, comments, diff, g["block"])
 
-    if mode == "full":
+    if mode == "agentic":
+        # Forge drives a tool loop so the model reviews WITH HANDS — reads files, greps
+        # callers, runs the touched tests — like plan-to-pr. Model-agnostic; uses the
+        # strongest configured model. The deterministic seeds are still folded in.
+        rm = models[0]
+        ev("agent", "info", f"agentic review with {rm['name']} — tools: read/grep/run_tests")
+        ao = AGENT.review(cfg, rm, _tok(cfg, rm), local_repo, diff, changed,
+                          goal=(pr.get("title") or ""), grounding=g["block"], on_event=ev)
+        if ao.get("error"):
+            return {"error": ao["error"]}
+        review_obj = {"summary": ao.get("summary", ""), "findings": ao.get("findings", []),
+                      "verdict": ao.get("verdict")}
+        meta = {"mode": "agentic", "finders": [rm["name"]], "steps": ao.get("steps")}
+    elif mode == "full":
         finders = models[:2]                       # up to 2 distinct models
         ev("find", "info", f"{len(finders)} finder model(s): "
                            f"{', '.join(m['name'] for m in finders)}")
