@@ -330,6 +330,59 @@ def enclosing(changed_files: list[str], repo_name: str | None, cap: int = 24000)
     return "\n\n".join(out)
 
 
+# -------------------------------------------------------------- git history
+def _git(repo_dir: Path, args: list[str]) -> str:
+    try:
+        p = subprocess.run(["git", "-C", str(repo_dir), *args],
+                           capture_output=True, text=True, timeout=20)
+        return p.stdout if p.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def history(repo_name: str | None, changed_files: list[str], per_file: int = 4) -> str:
+    """Recent commits on each changed file — the 'why does this code look like this,
+    is the diff re-introducing something a recent fix removed' angle (blame/log)."""
+    d = clone_dir(repo_name)
+    if not d:
+        return ""
+    out = []
+    for f in (changed_files or [])[:8]:
+        if _is_test_path(f):
+            continue
+        log = _git(d, ["log", f"-{per_file}", "--oneline", "--no-merges", "--", f]).strip()
+        if log:
+            out.append(f"{f}:\n" + "\n".join("  " + l for l in log.splitlines()))
+    return "\n".join(out)
+
+
+# ------------------------------------------------------------------- sanity
+_GENERATED = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
+              ".generated.", ".min.js", "/dist/", "/build/")
+
+
+def sanity(diff: str, changed_files: list[str]) -> list[str]:
+    """Cheap pre-review smell checks: a change whose shape does not match a normal
+    targeted edit (stray generated files, a wrong-base-looking deletion count, a
+    migration that needs ordering) — surfaced so the reviewer looks before trusting."""
+    notes = []
+    gen = [f for f in (changed_files or []) if any(g in f for g in _GENERATED)]
+    if gen:
+        notes.append(f"touches generated/lock files ({', '.join(gen[:4])}) — confirm "
+                     f"these are intended and not a stray commit")
+    adds = sum(1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
+    dels = sum(1 for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---"))
+    if dels > max(60, adds * 3):
+        notes.append(f"heavy deletions ({dels} removed vs {adds} added) — verify this is "
+                     f"not built on the wrong base (a stale checkout looks like this)")
+    migs = [f for f in (changed_files or [])
+            if "migration" in f.lower() or "alembic/" in f.lower() or f.endswith(".sql")]
+    if migs:
+        notes.append(f"adds a DB migration ({', '.join(migs[:3])}) — check migration-vs-code "
+                     f"ordering: can the old code run against the new schema during rollout?")
+    return notes
+
+
 # ------------------------------------------------------------------ assemble
 def build(repo_name: str | None, pr_body: str, diff: str,
           changed_files: list[str], memory_block: str = "") -> dict:
@@ -339,7 +392,12 @@ def build(repo_name: str | None, pr_body: str, diff: str,
     seeds = reachability(diff, repo_name, changed_files) + ci_wiring(diff, repo_name, changed_files)
     conv = conventions(repo_name)
     encl = enclosing(changed_files, repo_name)
+    hist = history(repo_name, changed_files)
+    notes = sanity(diff, changed_files)
     parts = []
+    if notes:
+        parts.append("PRE-REVIEW SANITY (look before trusting the diff):\n"
+                     + "\n".join("  - " + n for n in notes))
     if conv:
         parts.append("REPO CONVENTIONS (the repo's own rules — cite the specific one a "
                      "finding violates):\n" + conv)
@@ -355,8 +413,11 @@ def build(repo_name: str | None, pr_body: str, diff: str,
                      "confirm and keep unless you can show they are wrong):\n"
                      + json.dumps([{k: v for k, v in s.items() if k != "seed"} for s in seeds],
                                   ensure_ascii=False))
+    if hist:
+        parts.append("RECENT HISTORY of the changed files (does the diff re-introduce "
+                     "something a recent commit fixed, or ignore why the code looks so):\n" + hist)
     if encl:
         parts.append("ENCLOSING CODE (base text around the changed files, so you can read "
                      "the whole function and its neighbours):\n" + encl)
     return {"block": "\n\n".join(parts), "seeds": seeds, "acceptance": acc,
-            "has_conventions": bool(conv)}
+            "has_conventions": bool(conv), "sanity": notes}

@@ -139,6 +139,40 @@ def _pick_base(owner_repo: str, token: str) -> tuple[str, str]:
                      f"default branch {default}")
 
 
+def _preflight(rs, rid: str, owner_repo: str, token: str, reviewed: dict, base: str) -> None:
+    """Deployment checks before the PR opens — emitted as warnings, since the human
+    has approved the change but should know what it collides with. Never blocks: a
+    warning the author can weigh beats a silent merge conflict or a migration that
+    ran against code that could not tolerate the new schema."""
+    ours = {d["path"] for d in reviewed.get("diffs", [])}
+    migs = [p for p in ours
+            if "migration" in p.lower() or "/alembic/" in p.lower() or p.endswith(".sql")]
+    if migs:
+        rs.emit(rid, "pr", "warn",
+                f"Contains a DB migration ({', '.join(sorted(migs)[:3])}) — confirm the "
+                f"order (does it run before or after deploy?) and that the old code "
+                f"tolerates the new schema during the rollout window", level="warn")
+    try:
+        open_prs = _api("GET", f"/repos/{owner_repo}/pulls?state=open&per_page=50", token)
+    except RuntimeError:
+        return
+    overlaps = []
+    for pr in (open_prs if isinstance(open_prs, list) else [])[:25]:
+        try:
+            files = _api("GET",
+                         f"/repos/{owner_repo}/pulls/{pr['number']}/files?per_page=100", token)
+        except RuntimeError:
+            continue
+        shared = ours & {f["filename"] for f in (files if isinstance(files, list) else [])}
+        if shared:
+            overlaps.append((pr["number"], sorted(shared)[:4]))
+    if overlaps:
+        msg = "; ".join(f"#{n} ({', '.join(fs)})" for n, fs in overlaps[:5])
+        rs.emit(rid, "pr", "warn",
+                f"Other open PR(s) touch the same files — merge-conflict risk, review "
+                f"against the right base: {msg}", level="warn")
+
+
 def open_pr(rs, rid: str, run: dict, built: dict, reviewed: dict,
             owner_repo: str, token: str) -> dict:
     """Branch, commit each file, open the PR. Only ever called after approval."""
@@ -155,6 +189,7 @@ def open_pr(rs, rid: str, run: dict, built: dict, reviewed: dict,
         except RuntimeError:
             why = f"{why} (intended stack base {stacked_on} was not on the remote)"
     rs.emit(rid, "pr", "step", f"Base branch: {base}", {"reason": why})
+    _preflight(rs, rid, owner_repo, token, reviewed, base)
 
     head_sha = _api("GET", f"/repos/{owner_repo}/git/ref/heads/{base}",
                     token)["object"]["sha"]

@@ -202,26 +202,45 @@ def _dedup(findings: list[dict]) -> list[dict]:
     return out
 
 
+# Two axes, reported separately and never merged: Spec (does the change deliver and
+# verify what it claims) vs Standards (is the code itself correct and clean).
+_SPEC_ANGLES = {"acceptance", "reachability", "ci-wiring"}
+
+
+def _axis(f: dict) -> str:
+    return "Spec" if str(f.get("angle", "")).lower() in _SPEC_ANGLES else "Standards"
+
+
 def _draft(owner: str, repo: str, number: int, review: dict, meta: dict,
            n_comments: int) -> str:
     order = {"high": 0, "medium": 1, "low": 2}
+    icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}
+
+    def _fmt(f: dict) -> str:
+        sev = str(f.get("severity", "low")).lower()
+        loc = f.get("file", "")
+        if f.get("line"):
+            loc += f":{f['line']}"
+        conf = f" _(confidence {f['confidence']})_" if f.get("confidence") else ""
+        return (f"- {icon.get(sev, '⚪')} **{sev}** "
+                f"{('`' + loc + '` — ') if loc else ''}{f.get('detail', '')}{conf}")
+
     findings = sorted(review.get("findings", []),
                       key=lambda f: order.get(str(f.get("severity", "low")).lower(), 3))
-    icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}
     lines = [f"**Review of `{owner}/{repo}#{number}`**", ""]
     if review.get("summary"):
         lines += [review["summary"], ""]
     if findings:
         lines.append(f"**Findings ({len(findings)})**")
-        for f in findings:
-            sev = str(f.get("severity", "low")).lower()
-            loc = f.get("file", "")
-            if f.get("line"):
-                loc += f":{f['line']}"
-            conf = f" _(confidence {f['confidence']})_" if f.get("confidence") else ""
-            lines.append(f"- {icon.get(sev, '⚪')} **{sev}** "
-                         f"{('`' + loc + '` — ') if loc else ''}{f.get('detail', '')}{conf}")
-        lines.append("")
+        # Spec axis first — an unmet requirement outranks a clean-code nit.
+        for axis in ("Spec", "Standards"):
+            group = [f for f in findings if _axis(f) == axis]
+            if group:
+                label = ("Spec — does it deliver & verify what it claims"
+                         if axis == "Spec" else "Standards — is the code correct & clean")
+                lines.append(f"_{label}_")
+                lines += [_fmt(f) for f in group]
+                lines.append("")
     else:
         lines += ["No blocking issues found.", ""]
     if review.get("verdict"):
