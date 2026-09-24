@@ -126,6 +126,39 @@ def for_files(repo: str, files: list[str], path: str = DB, limit: int = 20) -> l
     return rows
 
 
+def open_prs(repos: list[str], path: str = DB) -> list[dict]:
+    """Open PRs for these owner/repo full names, straight from the index (instant,
+    no live GitHub call) — the PR list the view renders. Shape matches the live one."""
+    if not repos:
+        return []
+    c = _db(path)
+    q = ("SELECT p.repo,p.number,p.title,p.author,p.base,p.head,p.url,"
+         " p.created,p.updated, (SELECT COUNT(*) FROM comments cm"
+         "   WHERE cm.repo=p.repo AND cm.number=p.number) AS comments"
+         " FROM prs p WHERE p.state='open' AND p.repo IN (%s)"
+         " ORDER BY p.updated DESC" % ",".join("?" * len(repos)))
+    out = []
+    for r in c.execute(q, tuple(repos)).fetchall():
+        out.append({"repo": r["repo"], "number": r["number"], "title": r["title"],
+                    "author": r["author"], "draft": False, "base": r["base"],
+                    "head": r["head"], "created_at": r["created"],
+                    "updated_at": r["updated"], "url": r["url"],
+                    "labels": [], "comments": r["comments"], "from_index": True})
+    c.close()
+    return out
+
+
+def have(repos: list[str], path: str = DB) -> bool:
+    """True if the index holds any PR for these repos (so the view can prefer it)."""
+    if not repos:
+        return False
+    c = _db(path)
+    n = c.execute("SELECT COUNT(*) FROM prs WHERE repo IN (%s)"
+                  % ",".join("?" * len(repos)), tuple(repos)).fetchone()[0]
+    c.close()
+    return n > 0
+
+
 def search(query: str, repo: str | None = None, path: str = DB, limit: int = 20) -> list[dict]:
     """Full-text over every review comment — the queryable 'why' across all PRs."""
     c = _db(path)

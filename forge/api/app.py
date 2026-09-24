@@ -777,16 +777,28 @@ def orgs_list():
 
 
 @app.get("/api/prs")
-def prs_list(repos: str | None = None, org: str | None = None):
+def prs_list(repos: str | None = None, org: str | None = None, fresh: int = 0):
     """Open PRs across the indexed repos, or one org, or an explicit list.
+
+    Served from the local PR-history index by default (instant — the live GitHub
+    fetch on every load is why the view felt like it reloaded). `?fresh=1` forces a
+    live pull; POST /api/prs/reindex refreshes the index in the background.
 
     Repos are grouped by owner so each org is queried with its OWN read token —
     a prometheus token never touches an olaf repo and vice versa."""
+    from ..runs import pr_history as PRHist
     origins = _indexed_origins()
     if repos:
         wanted = [s.strip() for s in repos.split(",") if s.strip()]
     else:
         wanted = [fn for fn in origins if not org or _org_of(fn) == org]
+
+    if not fresh and wanted and PRHist.have(wanted):
+        items = PRHist.open_prs(wanted)
+        for p in items:
+            p["indexed_as"] = origins.get(p["repo"])
+        return {"authenticated": True, "prs": items, "errors": [], "repos": wanted,
+                "orgs": sorted({_org_of(fn) for fn in wanted}), "source": "index"}
 
     if not wanted:
         why = (f"No indexed repo belongs to org {org!r}." if org and origins else
@@ -825,6 +837,28 @@ def prs_list(repos: str | None = None, org: str | None = None):
                        ". Add a per-org token in Settings, or a global "
                        f"{GITHUB_READ}.")
     return resp
+
+
+@app.post("/api/prs/reindex")
+def prs_reindex(org: str | None = None):
+    """Refresh the PR-history index from GitHub in the background (read-only). The
+    view keeps serving the old index until this finishes, so it never blocks."""
+    import threading
+    from ..runs import pr_history as PRHist
+    origins = _indexed_origins()
+    wanted = [fn for fn in origins if not org or _org_of(fn) == org]
+
+    def _run():
+        for fn in wanted:
+            tok = _read_token(_org_of(fn))
+            if tok:
+                try:
+                    PRHist.ingest_repo(fn, tok)
+                except Exception:
+                    pass
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "reindexing": wanted}
 
 
 @app.get("/api/prs/{owner}/{repo}/{number}")

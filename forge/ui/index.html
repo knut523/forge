@@ -1204,11 +1204,18 @@ function ago(iso){
   return Math.round(s/86400)+'d';
 }
 
+async function reindexPRs(){
+  const btn = $('#prReindex'); if(btn){ btn.disabled = true; btn.textContent = '⟳ refreshing…'; }
+  const qp = ACTIVE_ORG ? ('?org='+encodeURIComponent(ACTIVE_ORG)) : '';
+  try{ await send('POST','/prs/reindex'+qp, {}); }catch(e){}
+  // the reindex runs in the background; give it a moment then reload from the index
+  setTimeout(loadPRs, 4000);
+}
 async function loadPRs(){
   const box = $('#prs');
-  box.innerHTML = '<div class="spin">asking GitHub…</div>';
+  box.innerHTML = '<div class="spin">loading…</div>';
   let d;
-  try{ d = await get('/prs', {org: ACTIVE_ORG}); }   // scoped by the header org switcher
+  try{ d = await get('/prs', {org: ACTIVE_ORG}); }   // instant from the local index
   catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
 
   box.innerHTML = '';
@@ -1244,6 +1251,12 @@ async function loadPRs(){
     b.onclick = ()=>{ PR_SORT=k; localStorage.setItem('forge_prsort',k); loadPRs(); };
     bar.appendChild(b);
   });
+  const rb = el(`<button id="prReindex" title="Refresh from GitHub in the background"
+    style="border:1px solid var(--line);border-radius:999px;padding:4px 11px;cursor:pointer;
+    font:inherit;font-size:12px;background:var(--panel2);color:var(--ink);margin-left:auto">⟳ refresh</button>`);
+  rb.onclick = reindexPRs;
+  bar.appendChild(rb);
+  if(d.source==='index') bar.appendChild(el('<span class="muted" style="font-size:11px">· from index</span>'));
   box.appendChild(bar);
 
   const mkRow = (p)=>{
