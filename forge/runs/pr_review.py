@@ -16,6 +16,7 @@ human-approved step (the comment endpoint in api/app.py).
 from __future__ import annotations
 
 import json
+import re
 
 from ..config import llm
 from ..config.store import ConfigStore
@@ -24,9 +25,42 @@ from . import review_grounding as RG
 from . import review_exec as REx
 from .engine import _extract_json
 
-# Big enough to cover a real feature PR whole (a 54-file olaf change is ~50k
-# chars), small enough that a vendored lockfile can't bury the signal.
-_DIFF_CAP = 60000
+# Modern review models carry large context, so the budget should hold a real
+# feature PR whole rather than clip it — a clipped diff is why a review misses the
+# back half of a big change. The cap is a runaway backstop, not a design tool;
+# noise (lockfiles, vendored/generated code) is dropped BEFORE it, so the budget
+# goes to code a human would actually review.
+_DIFF_CAP = 300000
+_NOISE = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
+          "Cargo.lock", "composer.lock", "go.sum", "Gemfile.lock",
+          ".min.js", ".min.css", ".map", "/dist/", "/build/", "/vendor/",
+          "__snapshots__", ".snap")
+
+
+def _prep_diff(diff: str) -> tuple[str, str]:
+    """Drop vendored/generated/lockfile hunks so the model's budget goes to real
+    code, then cap. Returns (prepared_diff, note)."""
+    sections = re.split(r"(?=^diff --git )", diff, flags=re.M)
+    kept, dropped = [], []
+    for s in sections:
+        if not s.strip():
+            continue
+        m = re.match(r"diff --git a/(\S+) b/(\S+)", s)
+        path = m.group(2) if m else ""
+        if path and any(n in path for n in _NOISE):
+            dropped.append(path)
+        else:
+            kept.append(s)
+    out = "".join(kept) if kept else diff
+    notes = []
+    if dropped:
+        notes.append(f"omitted {len(dropped)} generated/lock file(s) "
+                     f"({', '.join(sorted(set(dropped))[:5])})")
+    if len(out) > _DIFF_CAP:
+        out = out[:_DIFF_CAP] + (f"\n\n… diff truncated at {_DIFF_CAP // 1000}k chars — "
+                                 f"this change is unusually large; review the remainder directly …")
+        notes.append(f"still truncated at {_DIFF_CAP // 1000}k chars")
+    return out, ("; ".join(notes) if notes else "")
 
 _ANGLES = (
     "(1) line-by-line correctness: inverted/wrong conditions, off-by-one, "
@@ -277,8 +311,9 @@ def review(cfg: ConfigStore, owner: str, repo: str, number: int,
     comments = PRs.comments(owner, repo, number, read_token)
     impact = (PRs.impact_for(pr, index_store, local_repo) if local_repo
               else {"available": False, "why": "this repo is not indexed locally"})
-    if len(diff) > _DIFF_CAP:
-        diff = diff[:_DIFF_CAP] + f"\n\n… diff truncated at {_DIFF_CAP} chars …"
+    diff, diffnote = _prep_diff(diff)
+    if diffnote:
+        ev("context", "info", f"diff prepared: {diffnote}")
     reaches = [r["repo"] for r in impact.get("reaches", [])] if impact.get("available") else []
     changed = [f.get("path") for f in pr.get("files", []) if f.get("path")]
     g = RG.build(local_repo, pr.get("body", ""), diff, changed,
@@ -366,7 +401,7 @@ def review_built(cfg: ConfigStore, repo: str, goal: str, diffs: list[dict],
     changed = [d.get("path") for d in diffs if d.get("path")]
     diff = "\n".join(f"+++ b/{d.get('path')}\n{d.get('diff','')}" for d in diffs)
     if len(diff) > _DIFF_CAP:
-        diff = diff[:_DIFF_CAP] + f"\n\n… diff truncated at {_DIFF_CAP} chars …"
+        diff = diff[:_DIFF_CAP] + f"\n\n… diff truncated at {_DIFF_CAP // 1000}k chars …"
     g = RG.build(repo, goal, diff, changed, memory_block=_memory_block(repo, changed))
     xr = REx.run_tests(repo, "\n".join(d.get("diff", "") for d in diffs), changed)
     if xr.get("seeds"):
