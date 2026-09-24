@@ -116,10 +116,12 @@ def for_files(repo: str, files: list[str], path: str = DB, limit: int = 20) -> l
     if not files:
         return []
     c = _db(path)
+    # match either the full owner/repo or a short index name (…/olaf-admin)
     q = ("SELECT number,kind,author,path,line,created,body FROM comments"
-         " WHERE repo=? AND path IN (%s) AND author != '' ORDER BY created DESC LIMIT ?"
+         " WHERE (repo=? OR repo LIKE ?) AND path IN (%s) AND author != ''"
+         " ORDER BY created DESC LIMIT ?"
          % ",".join("?" * len(files)))
-    rows = [dict(r) for r in c.execute(q, (repo, *files, limit)).fetchall()]
+    rows = [dict(r) for r in c.execute(q, (repo, f"%/{repo}", *files, limit)).fetchall()]
     c.close()
     return rows
 

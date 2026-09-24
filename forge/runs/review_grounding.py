@@ -442,6 +442,27 @@ def sanity(diff: str, changed_files: list[str]) -> list[str]:
     return notes
 
 
+# ------------------------------------------- past review comments (angle E)
+def _past_review(repo_name: str | None, changed_files: list[str], cap: int = 8) -> str:
+    """What human reviewers flagged on these exact files before — the whole-history
+    version of the previous-comment angle. Best-effort; the index may be empty."""
+    if not repo_name or not changed_files:
+        return ""
+    try:
+        from . import pr_history
+        rows = pr_history.for_files(repo_name, changed_files, limit=cap)
+    except Exception:
+        return ""
+    out = []
+    for r in rows:
+        loc = r.get("path") or ""
+        if r.get("line"):
+            loc += f":{r['line']}"
+        body = " ".join((r.get("body") or "").split())[:280]
+        out.append(f"- @{r.get('author')} on {loc} (PR #{r.get('number')}): {body}")
+    return "\n".join(out)
+
+
 # ------------------------------------------------------------------ assemble
 def build(repo_name: str | None, pr_body: str, diff: str,
           changed_files: list[str], memory_block: str = "") -> dict:
@@ -455,7 +476,12 @@ def build(repo_name: str | None, pr_body: str, diff: str,
     encl = enclosing(changed_files, repo_name)
     hist = history(repo_name, changed_files)
     notes = sanity(diff, changed_files)
+    past = _past_review(repo_name, changed_files)
     parts = []
+    if past:
+        parts.append("PAST REVIEW COMMENTS on these files (human reviewers flagged this "
+                     "area before — verify the change does not re-introduce or ignore any "
+                     "of these; a recurrence is almost always a real finding):\n" + past)
     if notes:
         parts.append("PRE-REVIEW SANITY (look before trusting the diff):\n"
                      + "\n".join("  - " + n for n in notes))
