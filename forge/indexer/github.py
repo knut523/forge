@@ -25,9 +25,27 @@ class GitHubError(RuntimeError):
     pass
 
 
-def read_token() -> str | None:
+def read_token(org: str | None = None) -> str | None:
+    """The read token used to list and clone. $FORGE_READ_TOKEN wins (handy for
+    a one-off CLI run); otherwise fall back to what the UI stored in forge's
+    config database, per-org first, so the token you add in Settings powers both
+    the PR list and org indexing from one place."""
     tok = os.environ.get(READ_TOKEN_ENV, "").strip()
-    return tok or None
+    if tok:
+        return tok
+    try:
+        from ..config.store import ConfigStore, GITHUB_READ, org_read_key
+        c = ConfigStore()
+        try:
+            if org:
+                scoped = c.get_secret(org_read_key(org))
+                if scoped:
+                    return scoped
+            return c.get_secret(GITHUB_READ)
+        finally:
+            c.close()
+    except Exception:
+        return None
 
 
 def _api(url: str, token: str | None) -> list | dict:

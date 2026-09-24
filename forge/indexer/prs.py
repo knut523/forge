@@ -83,6 +83,46 @@ def list_open(full_names: list[str], token: str | None) -> tuple[list[dict], lis
     return out, errs
 
 
+def diff(owner: str, repo: str, number: int, token: str | None) -> str:
+    """The PR's unified diff as raw text, via the READ token. GitHub returns the
+    patch directly when asked with the diff media type."""
+    url = f"{API}/repos/{owner}/{repo}/pulls/{number}"
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github.v3.diff",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "forge",
+        **({"Authorization": f"Bearer {token}"} if token else {}),
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise GHError("GitHub rejected the read token (401) — expired or revoked.")
+        if e.code == 403:
+            raise GHError("GitHub refused (403) — rate limited, or the token cannot "
+                          "see this repository.")
+        raise GHError(f"GitHub {e.code} fetching the diff")
+    except Exception as e:
+        raise GHError(f"could not reach GitHub: {type(e).__name__}")
+
+
+def comments(owner: str, repo: str, number: int, token: str | None,
+             cap: int = 30) -> list[dict]:
+    """Existing conversation comments on the PR, oldest first. Best-effort: a
+    failure here must not sink a review, so it returns [] rather than raising."""
+    try:
+        items = _get(f"/repos/{owner}/{repo}/issues/{number}/comments", token,
+                     {"per_page": 100})
+    except GHError:
+        return []
+    out = [{"author": (c.get("user") or {}).get("login"),
+            "created_at": c.get("created_at"),
+            "body": (c.get("body") or "")[:1500]}
+           for c in (items if isinstance(items, list) else [])]
+    return out[-cap:]
+
+
 def detail(owner: str, repo: str, number: int, token: str | None) -> dict:
     fn = f"{owner}/{repo}"
     pr = _get(f"/repos/{fn}/pulls/{number}", token)

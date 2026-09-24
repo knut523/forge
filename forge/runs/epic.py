@@ -16,6 +16,7 @@ weakened by doing several of them.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import traceback
 
@@ -25,6 +26,7 @@ from ..indexer import query as Q
 from ..indexer import wayfinder as W
 from ..indexer.store import Store as IndexStore
 from . import engine as RunEngine
+from .ship import branch_name
 from .memory import MemoryStore
 from .store import RunStore
 
@@ -34,37 +36,126 @@ MAX_FILES_PER_ITEM = 6
 MAX_ITEMS = 12
 
 DECOMPOSE_SYSTEM = (
-    "You split a software feature into the SMALLEST pull requests that can "
-    "deliver it. You are given real indexed facts about the repositories.\n\n"
-    "Rules for the split, in priority order:\n"
-    "1. Each item must be INDEPENDENTLY REVIEWABLE — one reviewer, one sitting, "
-    "one logical change. If you cannot describe an item in a single sentence "
-    "without 'and', split it.\n"
-    "2. Each item must be INDEPENDENTLY REVERTIBLE — reverting it must not break "
-    "what shipped before it.\n"
-    "3. Anything that defines a SHARED CONTRACT (a type, a route, a schema, a "
-    "field) must be its OWN item and must come FIRST, so later items build "
-    "against it instead of each inventing their own version.\n"
-    "4. Prefer more small items over fewer large ones. An item touching more "
-    f"than {MAX_FILES_PER_ITEM} files is almost certainly two items.\n"
-    "5. Do not invent work. If the feature is genuinely one small change, return "
-    "ONE item and say so.\n\n"
+    "You split a software feature into the FEWEST pull requests that still deliver "
+    "it cleanly. Fewer, coherent PRs beat many fragments. Over-splitting is a "
+    "defect: it makes more review, more CI, and dead-code PRs that ship nothing on "
+    "their own. You are given real indexed facts about the repositories.\n\n"
+    "Rules, in priority order:\n"
+    "1. MINIMAL COUNT. Emit the smallest number of PRs that ships the feature. Do "
+    "NOT split for its own sake. If it is genuinely one change, return ONE item.\n"
+    "2. EACH ITEM DELIVERS VALUE ON ITS OWN. A PR must change product behaviour or "
+    "a real integration by itself. A helper, type, or function and its ONLY caller "
+    "in the same repo are ONE item — never ship code that nothing calls yet.\n"
+    "3. NO INVESTIGATION PRs. Never create an item whose job is only to count, "
+    "measure, report on, or size existing data. That is a query the operator runs, "
+    "not a pull request.\n"
+    "4. SHARED CONTRACT FIRST — but only when TWO OR MORE later items consume it. "
+    "A type/route/schema/field used by >=2 items is its own first item; if only "
+    "one item uses it, fold them together.\n"
+    "5. CROSS-REPO: implement shared logic ONCE, in the repo where it actually "
+    "runs. Duplicate it into another repo ONLY if that repo independently needs it "
+    "at runtime — and then name that need in the rationale. Prefer one "
+    "implementation plus a contract over N copies.\n"
+    "6. Each item must still be INDEPENDENTLY REVIEWABLE (one reviewer, one "
+    "sitting, one logical change — if you need 'and' to describe it, reconsider) "
+    "and INDEPENDENTLY REVERTIBLE (reverting it does not break what shipped "
+    "before).\n"
+    f"7. An item touching more than {MAX_FILES_PER_ITEM} files is probably two — "
+    "but do not split one coherent change just to lower the file count.\n\n"
     "Output ONLY a JSON object, no prose and no fences:\n"
     '{"items":[{"title":"imperative one-liner","repo":"<indexed repo name>",'
-    '"rationale":"why this is its own PR","files":["likely/path.py"],'
-    '"acceptance":["observable check"],"depends_on":[<0-based indices>],'
-    '"risk":"low|medium|high"}],"notes":"how you split it and why"}'
+    '"rationale":"why this is its own PR and why it must ship separately",'
+    '"files":["likely/path.py"],"acceptance":["observable check"],'
+    '"depends_on":[<0-based indices>],"risk":"low|medium|high"}],'
+    '"notes":"how few PRs you used and why that is the minimum"}'
 )
 
 ASSESS_SYSTEM = (
-    "You review a proposed split of a feature into pull requests. You are a "
-    "sceptic: your job is to find items that are too big, overlapping, or not "
-    "independently shippable. For each item give a verdict of 'ok', 'split' "
-    "(too large — say how to divide it) or 'merge' (too small to stand alone — "
-    "say which item to fold it into). Be specific and brief. "
-    'Output ONLY JSON: {"verdicts":[{"index":0,"verdict":"ok","why":"..."}],'
+    "You review a proposed split of a feature into pull requests, as a sceptic "
+    "whose goal is the FEWEST PRs that still ship it. Hunt sprawl. For each item "
+    "return a verdict:\n"
+    "- 'ok' — it earns its own PR (delivers product value by itself).\n"
+    "- 'merge' — too small or dead on its own: a helper/type split from its only "
+    "caller, or a shared contract with a single consumer. Give 'fold_into' = the "
+    "index of the item it belongs with.\n"
+    "- 'drop' — it should not be a PR at all: an investigation/measurement/"
+    "reporting item, a cross-repo duplicate of logic that already ships elsewhere, "
+    "or work the feature does not need.\n"
+    "- 'split' — genuinely two changes; say how to divide.\n"
+    "Prefer 'merge'/'drop' over 'ok' when an item does not deliver value alone. "
+    "Be specific and brief.\n"
+    'Output ONLY JSON: {"verdicts":[{"index":0,"verdict":"ok|merge|drop|split",'
+    '"fold_into":<index or null>,"why":"..."}],"recommended_pr_count":<int>,'
     '"overall":"one paragraph"}'
 )
+
+
+def _apply_verdicts(items: list[dict],
+                    verdicts: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Actually shrink the split: fold 'merge' items into their target and remove
+    'drop' items, then reindex depends_on onto the survivors. Fail-safe by design —
+    on any inconsistency it returns the items unchanged, because a wrong reduction
+    must never break a plan or delete real work."""
+    try:
+        vby = {v["index"]: v for v in verdicts if isinstance(v.get("index"), int)}
+        n = len(items)
+        fold: dict[int, int] = {}   # src -> direct target
+        remove: set[int] = set()
+        for i in range(n):
+            v = vby.get(i)
+            if not v:
+                continue
+            verd = str(v.get("verdict", "")).lower()
+            if verd == "drop":
+                remove.add(i)
+            elif verd == "merge":
+                dst = v.get("fold_into")
+                if isinstance(dst, int) and 0 <= dst < n and dst != i:
+                    fold[i] = dst
+                    remove.add(i)
+        if not remove:
+            return items, []
+
+        def final_dst(x: int) -> int:
+            seen = set()
+            while x in fold and x not in seen:
+                seen.add(x)
+                x = fold[x]
+            return x
+
+        survivors = [i for i in range(n) if i not in remove]
+        if not survivors:                      # never drop the whole feature
+            return items, []
+        work = [dict(it) for it in items]      # do not mutate the caller's list
+        for src in fold:
+            dst = final_dst(src)
+            if dst in remove:                  # fold target got removed → bail safe
+                return items, []
+            work[dst].setdefault("files", [])
+            for f in work[src].get("files") or []:
+                if f not in work[dst]["files"]:
+                    work[dst]["files"].append(f)
+            work[dst].setdefault("acceptance", [])
+            for a in work[src].get("acceptance") or []:
+                if a not in work[dst]["acceptance"]:
+                    work[dst]["acceptance"].append(a)
+        oldnew = {old: new for new, old in enumerate(survivors)}
+        reduced = []
+        for old in survivors:
+            it = dict(work[old])
+            deps = []
+            for d in it.get("depends_on") or []:
+                t = final_dst(d) if d in fold else d
+                if t in oldnew and t != old:
+                    deps.append(oldnew[t])
+            it["depends_on"] = sorted(set(deps))
+            reduced.append(it)
+        changes = [{"index": i, "verdict": str(vby[i].get("verdict")),
+                    "fold_into": vby[i].get("fold_into"),
+                    "why": vby[i].get("why")} for i in sorted(remove)]
+        return reduced, changes
+    except Exception:
+        return items, []
 
 
 def _pick_model(cfg: ConfigStore):
@@ -139,13 +230,43 @@ def _decompose(rs: RunStore, eid: str, cfg: ConfigStore, goal: str,
 
 def _assess(rs: RunStore, eid: str, cfg: ConfigStore, items: list[dict],
             repos: list[str]) -> dict:
-    """Deterministic checks first, then a sceptic. Cheap and reliable before
-    expensive and fallible."""
+    """A sceptic trims sprawl toward the fewest PRs, its merges/drops are actually
+    applied, then deterministic structural checks run on the trimmed set. Returns
+    the possibly-reduced items so the plan itself shrinks — the reviewer has teeth,
+    not just an opinion."""
     rs.set_phase(eid, "assess")
-    problems: list[dict] = []
 
-    # Two items editing the same file cannot be reviewed or reverted
-    # independently — this is the parallel-PR conflict, caught before it exists.
+    # 1. Sceptic: which items should merge into another or drop entirely.
+    verdicts: list[dict] = []
+    model, token, _ = _pick_model(cfg)
+    if model is not None:
+        summary = "\n".join(
+            f"{i}. [{it.get('repo')}] {it.get('title')} — files: "
+            f"{', '.join(it.get('files') or []) or 'none named'} — "
+            f"{it.get('rationale') or ''}"
+            for i, it in enumerate(items))
+        text, _meta = llm.complete(
+            model, token, ASSESS_SYSTEM,
+            f"PROPOSED SPLIT ({len(items)} PRs)\n{summary}", max_tokens=3000)
+        obj = RunEngine._extract_json(text or "") or {}
+        verdicts = obj.get("verdicts") or []
+        if obj.get("overall"):
+            rs.emit(eid, "assess", "info", "Reviewer's read",
+                    {"text": str(obj["overall"])[:1500],
+                     "recommended_pr_count": obj.get("recommended_pr_count")})
+
+    # 2. Apply the merges/drops. Fail-safe: items come back unchanged on any doubt.
+    before = len(items)
+    items, changes = _apply_verdicts(items, verdicts)
+    if changes:
+        rs.emit(eid, "assess", "finding",
+                f"Trimmed the split from {before} to {len(items)} PR(s)",
+                {"folded_or_dropped": changes}, level="warn")
+
+    # 3. Structural checks on the FINAL (trimmed) set. Two items editing the same
+    # file cannot be reviewed or reverted independently — the parallel-PR conflict,
+    # caught before it exists.
+    problems: list[dict] = []
     claims: dict[str, list[int]] = {}
     for i, it in enumerate(items):
         for f in it.get("files") or []:
@@ -154,7 +275,6 @@ def _assess(rs: RunStore, eid: str, cfg: ConfigStore, items: list[dict],
         if len(owners) > 1:
             problems.append({"kind": "overlap", "path": path, "items": owners,
                              "why": "more than one item edits this file"})
-
     for i, it in enumerate(items):
         n = len(it.get("files") or [])
         if n > MAX_FILES_PER_ITEM:
@@ -170,34 +290,16 @@ def _assess(rs: RunStore, eid: str, cfg: ConfigStore, items: list[dict],
             if not isinstance(d, int) or d >= len(items) or d == i:
                 problems.append({"kind": "bad_dependency", "item": i,
                                  "why": f"depends_on {d} is not a valid earlier item"})
-
     if problems:
-        rs.emit(eid, "assess", "warn", f"{len(problems)} structural problem(s) in the split",
+        rs.emit(eid, "assess", "warn",
+                f"{len(problems)} structural problem(s) in the split",
                 problems, level="warn")
     else:
         rs.emit(eid, "assess", "done",
                 "No overlapping files, every item has a check, dependencies resolve")
 
-    verdicts = []
-    model, token, _ = _pick_model(cfg)
-    if model is not None:
-        summary = "\n".join(
-            f"{i}. [{it.get('repo')}] {it.get('title')} — files: "
-            f"{', '.join(it.get('files') or []) or 'none named'}"
-            for i, it in enumerate(items))
-        text, _meta = llm.complete(model, token, ASSESS_SYSTEM,
-                                   f"PROPOSED SPLIT\n{summary}", max_tokens=3000)
-        obj = RunEngine._extract_json(text or "") or {}
-        verdicts = obj.get("verdicts") or []
-        flagged = [v for v in verdicts if v.get("verdict") in ("split", "merge")]
-        if flagged:
-            rs.emit(eid, "assess", "finding",
-                    f"The reviewer would change {len(flagged)} item(s)", flagged,
-                    level="warn")
-        if obj.get("overall"):
-            rs.emit(eid, "assess", "info", "Reviewer's read",
-                    {"text": str(obj["overall"])[:1500]})
-    return {"problems": problems, "verdicts": verdicts}
+    return {"items": items, "problems": problems, "verdicts": verdicts,
+            "changes": changes}
 
 
 def execute(epic_id: str, index_db: str) -> None:
@@ -222,17 +324,14 @@ def execute(epic_id: str, index_db: str) -> None:
                              next_action="Check Settings for an engineer model, "
                                          "then start it again.")
         assessment = _assess(rs, epic_id, cfg, items, repos)
+        items = assessment["items"]        # the trimmed set the sceptic left standing
 
         rs.clear_items(epic_id)
-        by_index = {}
         for i, it in enumerate(items):
-            by_index[i] = rs.add_item(epic_id, i, it)
-        for i, it in enumerate(items):
-            v = next((x for x in assessment["verdicts"]
-                      if x.get("index") == i), None)
+            iid = rs.add_item(epic_id, i, it)
             probs = [p for p in assessment["problems"] if p.get("item") == i
                      or i in (p.get("items") or [])]
-            rs.set_item(by_index[i], assessment={"verdict": v, "problems": probs})
+            rs.set_item(iid, assessment={"verdict": None, "problems": probs})
 
         rs.set_state(epic_id, {"repos": repos, "facts": facts[:20000]})
         rs.set_phase(epic_id, "approve")
@@ -265,28 +364,64 @@ def start(epic_id: str, index_db: str) -> None:
 
 # ─── execution, one pull request at a time ──────────────────────────────────
 
-def advance(epic_id: str, index_db: str) -> None:
-    """Start the next item whose dependencies are all done.
+def _sibling_context(rs: RunStore, items: list[dict], nxt: dict) -> str | None:
+    """A compact view of the files this item's dependencies already wrote — enough
+    for a dependent item to build on them (signatures + the first chunk of body),
+    not the full files, which would bloat the build prompt until the model rambles
+    instead of emitting the files JSON."""
+    parts = []
+    for d in nxt.get("depends_on", []):
+        dep = next((i for i in items if i["seq"] == d), None)
+        if not dep or not dep.get("run_id"):
+            continue
+        dc = rs.get(dep["run_id"])
+        st = dc.get("state") if dc else None
+        st = json.loads(st) if isinstance(st, str) else (st or {})
+        ws = f"/work/{dep['run_id']}"
+        for df in (st.get("reviewed") or {}).get("diffs", []):
+            try:
+                content = open(os.path.join(ws, df["path"]), encoding="utf-8").read()
+            except Exception:
+                continue
+            # head: the imports + the public surface (signatures, dataclasses, the
+            # first ~60 lines), so the dependent item knows the names to call
+            head = "\n".join(content.splitlines()[:60])
+            if len(content) > 4000:
+                head += f"\n… ({len(content) - 4000} more chars; full file exists once merged) …"
+            parts.append(f"--- {df['path']} (added by: {dep['title']}) ---\n{head[:4000]}")
+    return "\n\n".join(parts) if parts else None
 
-    Strictly one at a time. Parallelism is an optimisation; being unable to say
-    which change broke something is not a trade worth making yet.
-    """
+
+def advance(epic_id: str, index_db: str) -> None:
+    """Start every item whose dependencies are BUILT (at their gate or already
+    merged) — so the whole feature builds up front and waits for approval in a
+    batch, not one-approve-at-a-time. A dependent item is handed its dependencies'
+    just-built files to build on, and stacks its PR on their branch."""
+    started = []
     rs = RunStore()
     try:
         items = rs.items(epic_id)
-        done = {i["seq"] for i in items if i["status"] == "complete"}
-        running = [i for i in items if i["status"] == "running"]
-        if running:
-            return
-        nxt = next((i for i in items
-                    if i["status"] == "pending"
-                    and all(d in done for d in i["depends_on"])), None)
-        if nxt is None:
+
+        def cstat(i):
+            if i["status"] == "complete":
+                return "complete"
+            if i.get("run_id"):
+                c = rs.get(i["run_id"])
+                return c["status"] if c else None
+            return None
+        # a dependency counts as satisfied once its change is built (at its gate)
+        built = {i["seq"] for i in items
+                 if cstat(i) in ("awaiting_approval", "complete")}
+        ready = [i for i in items if i["status"] == "pending"
+                 and all(d in built for d in i["depends_on"])]
+        if not ready:
+            if any(i["status"] == "running" for i in items):
+                return
             left = [i for i in items if i["status"] not in ("complete", "skipped")]
             if left:
                 rs.finish(epic_id, "blocked",
                           reason=f"{len(left)} item(s) cannot start — their "
-                                 f"dependencies did not complete.",
+                                 f"dependencies did not build.",
                           next_action="Review the rejected or failed items below.")
             else:
                 urls = [i for i in items if i["status"] == "complete"]
@@ -295,23 +430,55 @@ def advance(epic_id: str, index_db: str) -> None:
                           next_action="Review them on GitHub.")
             return
 
-        goal = (f"{nxt['title']}\n\nThis is one piece of a larger feature: "
-                f"{rs.get(epic_id)['goal']}\n\nWhy this is its own change: "
-                f"{nxt['rationale']}\n\nIt must satisfy: "
-                + "; ".join(nxt["acceptance"]))
-        child = rs.create(nxt["repo"], goal,
-                          (nxt["files"] or [None])[0], None,
-                          kind="run", parent_id=epic_id)
-        rs.set_item(nxt["id"], status="running", run_id=child)
+        # Cap how many build at once: the whole feature still builds up front, but
+        # paced so the shared Claude bridge is not overwhelmed (a hammered single
+        # session hangs/fails). Each item reaching its gate re-triggers advance, so
+        # the next ones start automatically.
+        MAX_CONCURRENT = 2
+        building_now = sum(1 for i in items if i["status"] == "running"
+                           and cstat(i) in ("running", "queued"))
+        ready = ready[:max(0, MAX_CONCURRENT - building_now)]
+        if not ready:
+            return
+
+        epic_goal = rs.get(epic_id)["goal"]
+        for nxt in ready:
+            cur = next((i for i in rs.items(epic_id) if i["id"] == nxt["id"]), None)
+            if cur is None or cur["status"] != "pending":   # a racing advance won it
+                continue
+            goal = (f"{nxt['title']}\n\nThis is one piece of a larger feature: "
+                    f"{epic_goal}\n\nWhy this is its own change: "
+                    f"{nxt['rationale']}\n\nIt must satisfy: "
+                    + "; ".join(nxt["acceptance"]))
+            child = rs.create(nxt["repo"], goal,
+                              (nxt["files"] or [None])[0], None,
+                              kind="run", parent_id=epic_id)
+            sib = _sibling_context(rs, items, nxt)
+            if sib:
+                rs.set_state(child, {"sibling_ctx": sib})
+            # Stack on a same-repo dependency's branch. It exists on the remote once
+            # that dependency is approved; open_pr falls back to dev if it is not yet
+            # there (e.g. you approve out of order).
+            stack = [i for i in items if i["seq"] in nxt["depends_on"]
+                     and i["repo"] == nxt["repo"] and i.get("run_id")]
+            if stack:
+                dep = max(stack, key=lambda i: i["seq"])
+                base = branch_name(dep["title"], dep["run_id"])
+                rs.set_base(child, base)
+                rs.emit(epic_id, "execute", "info",
+                        f"Item {nxt['seq'] + 1} stacks on {base}")
+            rs.set_item(nxt["id"], status="running", run_id=child)
+            rs.emit(epic_id, "execute", "step",
+                    f"Item {nxt['seq'] + 1}/{len(items)}: {nxt['title']}",
+                    {"repo": nxt["repo"], "run": child, "files": nxt["files"]})
+            started.append(child)
         rs.db.execute("UPDATE runs SET status='running', phase='execute' WHERE id=?",
                       (epic_id,))
         rs.db.commit()
-        rs.emit(epic_id, "execute", "step",
-                f"Item {nxt['seq'] + 1}/{len(items)}: {nxt['title']}",
-                {"repo": nxt["repo"], "run": child, "files": nxt["files"]})
     finally:
         rs.close()
-    RunEngine.start(child, index_db)
+    for child in started:                       # launch outside the store lock
+        RunEngine.start(child, index_db)
 
 
 def on_child_finished(child_id: str, index_db: str) -> None:

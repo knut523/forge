@@ -18,6 +18,7 @@ import base64
 import difflib
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,6 +26,16 @@ from pathlib import Path
 
 API = "https://api.github.com"
 DOC_SUFFIXES = (".md", ".mdx", ".rst", ".txt", ".adoc")
+
+
+def branch_name(text: str, rid: str) -> str:
+    """The head branch for a run — descriptive and tool-neutral, matching the
+    repos' own `feat/<slug>` convention instead of leaking the tool name. The
+    short run id keeps it unique and lets a dependent stack recompute the same
+    name deterministically (the item title it derives from is identical on both
+    sides)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:40].strip("-")
+    return f"feat/{slug or 'change'}-{rid[:8]}"
 
 
 def _api(method: str, path: str, token: str, body: dict | None = None):
@@ -133,11 +144,21 @@ def open_pr(rs, rid: str, run: dict, built: dict, reviewed: dict,
     """Branch, commit each file, open the PR. Only ever called after approval."""
     rs.set_phase(rid, "pr")
     base, why = _pick_base(owner_repo, token)
+    stacked_on = run.get("base_branch")
+    if stacked_on:
+        # stack this PR on its dependency's branch — but only if that branch is
+        # actually on the remote; otherwise fall back to dev and say so.
+        try:
+            _api("GET", f"/repos/{owner_repo}/git/ref/heads/{stacked_on}", token)
+            base = stacked_on
+            why = f"stacked on {stacked_on} — its dependency in this feature"
+        except RuntimeError:
+            why = f"{why} (intended stack base {stacked_on} was not on the remote)"
     rs.emit(rid, "pr", "step", f"Base branch: {base}", {"reason": why})
 
     head_sha = _api("GET", f"/repos/{owner_repo}/git/ref/heads/{base}",
                     token)["object"]["sha"]
-    branch = f"forge/{rid}"
+    branch = branch_name((run.get("goal") or "").splitlines()[0] if run.get("goal") else "", rid)
     try:
         _api("POST", f"/repos/{owner_repo}/git/refs", token,
              {"ref": f"refs/heads/{branch}", "sha": head_sha})
@@ -163,27 +184,83 @@ def open_pr(rs, rid: str, run: dict, built: dict, reviewed: dict,
              token, payload)
         rs.emit(rid, "pr", "file", f"Committed {rel}")
 
-    body = _pr_body(run, reviewed)
+    st = run.get("state")
+    st = json.loads(st) if isinstance(st, str) else (st or {})
+    review = st.get("review") or {}
+    item = None
+    if run.get("parent_id"):
+        item = next((i for i in rs.items(run["parent_id"])
+                     if i.get("run_id") == rid), None)
+    body = _pr_body(run, reviewed, review, item,
+                    stacked_on if (stacked_on and base == stacked_on) else None)
+    title = ((item.get("title") if item else None) or run["goal"].splitlines()[0])[:250]
     pr = _api("POST", f"/repos/{owner_repo}/pulls", token,
-              {"title": run["goal"][:250], "head": branch, "base": base,
+              {"title": title, "head": branch, "base": base,
                "body": body, "draft": False})
     rs.emit(rid, "pr", "done", f"Opened PR #{pr['number']}",
             {"url": pr["html_url"], "base": base, "head": branch})
     return {"number": pr["number"], "url": pr["html_url"], "base": base}
 
 
-def _pr_body(run: dict, reviewed: dict) -> str:
-    """The description must describe the whole change, not just the last edit."""
+def _pr_body(run: dict, reviewed: dict, review: dict | None = None,
+             item: dict | None = None, stacked_on: str | None = None) -> str:
+    """A full, self-explaining PR description: what it does, why it is its own PR,
+    the files, what forge's review found, how it was checked, and honest limits."""
+    review = review or {}
+    sec = []
+
+    if stacked_on:
+        sec.append(f"> ⛓ **Stacked** on `{stacked_on}` — review and merge that PR "
+                   f"first; GitHub retargets this one to the base branch once it lands.")
+
+    # What it does
+    what = (item.get("title") if item else None) or run["goal"].splitlines()[0]
+    sec.append(f"## What this does\n\n{what}")
+
+    # Why (epic context) — the goal already carries the rationale for an item run
+    if item and item.get("rationale"):
+        sec.append(f"## Why this is its own PR\n\n{item['rationale']}")
+
+    # Files
     files = "\n".join(f"- `{d['path']}` +{d['additions']} −{d['deletions']}"
                       for d in reviewed["diffs"])
-    return (
-        f"## What this changes\n\n{run['goal']}\n\n"
-        f"## Files\n\n{files}\n\n"
-        f"## How it was produced\n\n"
-        f"Built by forge run `{run['id']}` against an index of the repository, "
-        f"using `{run.get('model') or 'an engineer model'}`. "
-        f"{'Documentation only.' if reviewed.get('docs_only') else ''}\n\n"
-        f"A human reviewed the diff and approved this run before it was opened. "
-        f"Automated checks covered syntax and stub detection only — the "
-        f"repository's own tests and typechecker were **not** run.\n"
-    )
+    sec.append(f"## Files changed ({len(reviewed['diffs'])})\n\n{files}")
+
+    # forge review of the diff, before it opened
+    findings = review.get("findings") or []
+    order = {"high": 0, "medium": 1, "low": 2}
+    icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}
+    lines = [f"**Verdict:** {review.get('verdict', '—')} · {len(findings)} finding(s)"
+             + (f" · {', '.join(review.get('models', []))} + adversarial verify"
+                if review.get("models") else "")]
+    for f in sorted(findings, key=lambda x: order.get(str(x.get("severity", "low")).lower(), 3)):
+        loc = f.get("file", "")
+        if f.get("line"):
+            loc += f":{f['line']}"
+        conf = f" _(conf {f['confidence']})_" if f.get("confidence") else ""
+        lines.append(f"- {icon.get(str(f.get('severity', 'low')).lower(), '⚪')} "
+                     f"**{f.get('severity', '?')}** {('`' + loc + '` — ') if loc else ''}"
+                     f"{f.get('detail', '')}{conf}")
+    if not findings:
+        lines.append("No blocking findings.")
+    sec.append("## Review (forge, before opening)\n\n" + "\n".join(lines))
+
+    # Acceptance criteria (epic item)
+    if item and item.get("acceptance"):
+        sec.append("## Acceptance\n\n"
+                   + "\n".join(f"- [ ] {c}" for c in item["acceptance"]))
+
+    # How it was verified — honest about limits
+    sec.append(
+        "## How it was checked\n\n"
+        "- Syntax + stub-marker check: passed\n"
+        "- Python tests it wrote: run best-effort (see the run's Verify step; a "
+        "failure to run for missing project deps is not a test failure)\n"
+        "- Typecheck and JS/TS test suites: **not run**\n"
+        "- A human reviewed this diff and approved the run before it opened")
+
+    sec.append(f"---\n<sub>Built by forge run `{run['id']}` "
+               f"using `{run.get('model') or 'an engineer model'}`"
+               f"{' · documentation only' if reviewed.get('docs_only') else ''}. "
+               f"This description is auto-generated — verify before merging.</sub>")
+    return "\n\n".join(sec) + "\n"

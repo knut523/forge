@@ -3,6 +3,6 @@ __pycache__/
 .venv/
 data/*.db
 data/repos/
-config/
+/config/
 data/
 work/

@@ -78,8 +78,9 @@ def _capture(rs: RunStore, rid: str, idx: IndexStore, repo: str,
             [{"symbol": h["qualname"], "at": f"{h['path']}", "referenced": h["refs"]}
              for h in hot])
 
-    # The repo's own instructions to contributors outrank anything we infer.
-    names = harvest_conventions(mem, repo, root)
+    # The repo's own instructions to contributors outrank anything we infer. Stamp them with the
+    # head SHA so a convention that changes in a later commit supersedes rather than overwrites.
+    names = harvest_conventions(mem, repo, root, sha=ov.get("head_sha"))
     if names:
         rs.emit(rid, "capture", "finding",
                 f"Read {len(names)} convention(s) from the repo's own docs", names)
@@ -243,9 +244,72 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
+def _recover_files(text: str) -> list[dict]:
+    """Salvage files from a build that ignored the JSON contract and emitted fenced
+    code blocks. A path is taken from the fence info string (```ts src/x.ts) or the
+    non-empty line just before the fence (a heading like **src/x.ts**)."""
+    path_re = re.compile(r"[\w./-]*[\w-]/[\w./-]*\.[A-Za-z0-9]+|[\w-]+\.[A-Za-z0-9]+")
+    fence_re = re.compile(
+        r"(?:^|\n)[ \t]*(?P<pre>[^\n]*)\n[ \t]*```(?P<info>[^\n]*)\n(?P<body>.*?)\n[ \t]*```",
+        re.S)
+    out = {}
+    for m in fence_re.finditer(text):
+        body = m.group("body")
+        if not body.strip():
+            continue
+        path = None
+        for cand in (m.group("info"), m.group("pre")):
+            pm = path_re.search(cand or "")
+            if pm and ("/" in pm.group(0) or "." in pm.group(0)):
+                path = pm.group(0).strip("*`# ")
+                break
+        if path:
+            out[path] = body          # last block for a path wins
+    return [{"path": p, "content": c} for p, c in out.items()]
+
+
+def _sibling_test(idx: IndexStore, repo: str, root: Path,
+                  wanted: list[str]) -> tuple[str | None, str | None]:
+    """An existing test in this repo, to show the model the house test convention —
+    runner, imports, assertion API. A generated test that guesses the wrong framework
+    (Jest-style `describe/it/expect` where the repo runs `node:test`, say) typechecks
+    red even when the code under test is perfect. Showing a real neighbour is what a
+    human does instead of guessing, and it costs one short read."""
+    langs = {os.path.splitext(w)[1] for w in wanted}
+    if {".ts", ".tsx", ".js", ".jsx"} & langs:
+        pats = ["%.test.ts", "%.test.tsx", "%.test.js", "%.spec.ts"]
+    elif ".py" in langs:
+        pats = ["%\\_test.py", "test\\_%.py"]
+    else:
+        return None, None
+    prefer_dir = os.path.dirname(wanted[0]) if wanted else ""
+    rows = []
+    for pat in pats:
+        rows += idx.db.execute(
+            "SELECT f.path FROM files f JOIN repos r ON r.id=f.repo_id"
+            " WHERE r.name=? AND f.path LIKE ? ESCAPE '\\' ORDER BY LENGTH(f.path) LIMIT 25",
+            (repo, pat)).fetchall()
+    cands = [r["path"] for r in rows if r["path"] not in wanted]
+    if not cands:
+        return None, None
+    cands.sort(key=lambda p: (0 if os.path.dirname(p) == prefer_dir else 1, len(p)))
+    for rel in cands:
+        p = root / rel
+        if p.is_file():
+            try:
+                return rel, "\n".join(p.read_text("utf-8", "replace").splitlines()[:45])
+            except OSError:
+                continue
+    return None, None
+
+
 def _build(rs: RunStore, rid: str, cfg: ConfigStore, idx: IndexStore, repo: str,
-           goal: str, plan_text: str, target: str | None, recall: str = "") -> dict:
-    """Write the change into an isolated workspace. Never touches the source tree."""
+           goal: str, plan_text: str, target: str | None, mem: MemoryStore,
+           feedback: str | None = None, sibling_ctx: str | None = None) -> dict:
+    """Write the change into an isolated workspace. Never touches the source tree.
+    `feedback` (auto-revise round) carries the previous attempt + review findings to
+    fix. `sibling_ctx` carries files an earlier PR in the same feature adds, so a
+    dependent item can build on them before they are merged."""
     rs.set_phase(rid, "build")
     model, token, why = _pick_model(cfg)
     if model is None:
@@ -285,16 +349,35 @@ def _build(rs: RunStore, rid: str, cfg: ConfigStore, idx: IndexStore, repo: str,
             except OSError:
                 continue
             seen.append({"path": rel, "content": body[:60000]})
+    # If a test is in scope, show the model a real sibling test so it matches the
+    # repo's runner and assertion style instead of guessing a framework.
+    sib_path, sib_head = None, None
+    if re.search(r"\btest", f"{goal or ''} {plan_text or ''}", re.I):
+        sib_path, sib_head = _sibling_test(idx, repo, root, wanted)
     rs.emit(rid, "build", "step", f"Building with {model['name']}",
             {"files_given_to_the_model": [f["path"] for f in seen] or "none",
+             "test_convention_from": sib_path or "none",
              "workspace": f"/work/{rid}"})
 
+    # Build sees only the memories that pin to or mention the files it is actually about — the plan
+    # already chose those files, so this is the precise, scoped recall NEXT step 5 asks for (Plan
+    # got the full set). A gotcha about a file this change never opens is noise here.
+    recall = mem.for_prompt(repo, touched=[f["path"] for f in seen])
     ctx = "\n\n".join(f"--- FILE {f['path']} ---\n{f['content']}" for f in seen)
     text, meta = llm.complete(
         model, token, BUILD_SYSTEM,
         f"GOAL\n{goal}\n\nPLAN\n{plan_text}"
         + (f"\n\n{recall}" if recall else "")
-        + f"\n\nCURRENT FILES\n{ctx or '(none supplied)'}",
+        + (f"\n\nSIBLING FILES — earlier PRs in this feature add these; build ON them "
+           f"(they exist once merged), do not recreate them:\n{sibling_ctx}"
+           if sibling_ctx else "")
+        + (f"\n\nTEST CONVENTION — this repo already has tests. If you write a test, "
+           f"match this neighbour's test runner, imports and assertion API EXACTLY; do "
+           f"NOT introduce a different framework:\n--- {sib_path} ---\n{sib_head}"
+           if sib_head else "")
+        + f"\n\nCURRENT FILES\n{ctx or '(none supplied)'}"
+        + (f"\n\nREVISION — fix the review findings, keep everything else:\n{feedback}"
+           if feedback else ""),
         max_tokens=24000)
     if text is None:
         rs.emit(rid, "build", "error", "The model call failed", meta, level="error")
@@ -303,17 +386,24 @@ def _build(rs: RunStore, rid: str, cfg: ConfigStore, idx: IndexStore, repo: str,
     obj = _extract_json(text) or {}
     files = obj.get("files")
     if not isinstance(files, list) or not files:
-        # Distinguish "it rambled" from "it was cut off mid-answer" — the fix is
-        # different (prompt vs token budget) and the raw tail shows which.
-        truncated = "<think>" in text and "</think>" not in text
-        rs.emit(rid, "build", "error",
-                "The model output was truncated mid-reasoning" if truncated
-                else "The model returned no usable files",
-                {"truncated": truncated, "chars": len(text),
-                 "output_tokens": meta.get("output_tokens"),
-                 "tail": text[-1200:]}, level="error")
-        return {"error": "build output truncated" if truncated
-                         else "unparseable build output"}
+        # The model sometimes ignores the JSON contract on big builds and emits
+        # fenced or bare code blocks instead. Recover them rather than failing the
+        # whole run for a format slip.
+        recovered = _recover_files(text)
+        if recovered:
+            files = recovered
+            rs.emit(rid, "build", "info",
+                    f"Recovered {len(files)} file(s) from non-JSON output")
+        else:
+            truncated = "<think>" in text and "</think>" not in text
+            rs.emit(rid, "build", "error",
+                    "The model output was truncated mid-reasoning" if truncated
+                    else "The model returned no usable files",
+                    {"truncated": truncated, "chars": len(text),
+                     "output_tokens": meta.get("output_tokens"),
+                     "tail": text[-1200:]}, level="error")
+            return {"error": "build output truncated" if truncated
+                             else "unparseable build output"}
 
     ws = Path(os.environ.get("FORGE_WORK", "/work")) / rid
     written = []
@@ -344,8 +434,48 @@ def _build(rs: RunStore, rid: str, cfg: ConfigStore, idx: IndexStore, repo: str,
     return {"files": written, "workspace": str(ws)}
 
 
-def _verify(rs: RunStore, rid: str, built: dict) -> dict:
-    """Cheap, honest checks on what was written. Not a test suite — and says so."""
+def _run_pytests(rs: RunStore, rid: str, ws: Path, root, test_files: list[str]) -> None:
+    """Best-effort: actually run the python tests that were written. Imports resolve
+    from the workspace first (the new/changed files) then the real working tree (the
+    rest of the repo). Missing project deps mean a test *cannot* run here — reported
+    as such, never as a failure."""
+    import os as _os
+    import subprocess
+    env = dict(_os.environ)
+    parts = [str(ws)] + ([str(root)] if root else [])
+    if env.get("PYTHONPATH"):
+        parts.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = ":".join(parts)
+    try:
+        r = subprocess.run(
+            ["python", "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider",
+             *[str(ws / t) for t in test_files]],
+            cwd=str(ws), env=env, capture_output=True, text=True, timeout=150)
+    except Exception as e:
+        rs.emit(rid, "verify", "info", f"could not run tests: {type(e).__name__}",
+                {"error": str(e)[:200]})
+        return
+    tail = "\n".join((r.stdout or r.stderr).strip().splitlines()[-10:])
+    if r.returncode == 0:
+        rs.emit(rid, "verify", "done", f"Tests passed ({len(test_files)} file(s))",
+                {"output": tail})
+    elif r.returncode == 5:
+        rs.emit(rid, "verify", "info", "pytest collected no tests", {"output": tail})
+    else:
+        blob = (r.stdout + r.stderr).lower()
+        could_not = ("modulenotfounderror" in blob or "importerror" in blob) \
+            and "assert" not in blob
+        rs.emit(rid, "verify", "warn",
+                ("tests could not run here — likely missing project deps in the forge "
+                 "container (not a real failure)" if could_not
+                 else "tests FAILED — see output"),
+                {"output": tail, "returncode": r.returncode, "could_not_run": could_not},
+                level="warn")
+
+
+def _verify(rs: RunStore, rid: str, built: dict, root=None) -> dict:
+    """Cheap, honest checks on what was written, and a best-effort run of any tests
+    it wrote. Still not a full CI — and says so."""
     rs.set_phase(rid, "verify")
     files = built.get("files") or []
     if not files:
@@ -380,9 +510,19 @@ def _verify(rs: RunStore, rid: str, built: dict) -> dict:
     else:
         rs.emit(rid, "verify", "done",
                 f"No syntax errors or stub markers ({checked} python file(s) compiled)")
+
+    # actually run any tests that were written (best-effort, honest about deps)
+    test_files = [f["path"] for f in files
+                  if f["path"].endswith(".py")
+                  and Path(f["path"]).name.startswith(("test_", "test"))
+                  and "test" in Path(f["path"]).name]
+    if test_files:
+        _run_pytests(rs, rid, ws, root, test_files)
+
     rs.emit(rid, "verify", "info", "What this check does NOT cover",
-            {"note": "the repo's own test suite and typechecker have not been run — "
-                     "that needs the project's toolchain in the workspace"})
+            {"note": "the typechecker and JS/TS test suites are not run here, and "
+                     "python tests needing uninstalled project deps cannot run in the "
+                     "forge container — treat those as unverified, not as passing"})
     return {"ok": not problems, "problems": problems}
 
 
@@ -409,6 +549,22 @@ def _facts_block(repo: str, cap: dict, imp: dict) -> str:
     return "\n".join(lines)
 
 
+def _revise_feedback(diffs: list[dict], findings: list[dict]) -> str:
+    """The prompt the builder gets on an auto-revise round: its own previous diff
+    plus the exact findings it must fix."""
+    diff = "\n".join(f"--- {d.get('path')}\n{d.get('diff', '')}" for d in diffs)
+    if len(diff) > 20000:
+        diff = diff[:20000] + "\n… (truncated)"
+    issues = "\n".join(
+        f"- [{f.get('severity', '?')}] {f.get('file', '')}"
+        f"{(':' + str(f['line'])) if f.get('line') else ''} — {f.get('detail', '')}"
+        for f in findings)
+    return (f"Your previous attempt produced this diff:\n{diff}\n\n"
+            f"A review found these issues you MUST fix:\n{issues}\n\n"
+            f"Return corrected FULL file contents that resolve every issue above "
+            f"without reintroducing them and without changing unrelated behaviour.")
+
+
 def execute(run_id: str, index_db: str) -> None:
     """Run the pipeline. Never raises — a crash is recorded as a failed run."""
     rs = RunStore()
@@ -420,6 +576,9 @@ def execute(run_id: str, index_db: str) -> None:
         if run is None:
             return
         repo, goal, target = run["repo"], run["goal"], run["target"]
+        _st0 = run.get("state")
+        _st0 = json.loads(_st0) if isinstance(_st0, str) else (_st0 or {})
+        sibling_ctx = _st0.get("sibling_ctx")   # files an earlier PR in this feature adds
         rs.emit(run_id, None, "info", "Run started",
                 {"repo": repo, "goal": goal, "target": target})
         idx = IndexStore(index_db, readonly=True)
@@ -428,11 +587,11 @@ def execute(run_id: str, index_db: str) -> None:
         cap = _capture(rs, run_id, idx, repo, mem, root)
         imp = _impact(rs, run_id, idx, repo, target)
 
-        # What we already know goes into BOTH prompts. Planning around a known
-        # gotcha is useless if the builder then walks straight into it.
-        recall = mem.for_prompt(repo)
+        # Plan gets the full ranked set — it has not chosen files yet. Build later gets only the
+        # memories that touch the files the plan settled on: same knowledge, scoped where it can be.
+        recall_plan = mem.for_prompt(repo)
 
-        plan = _plan(rs, run_id, cfg, goal, repo, cap, imp, recall)
+        plan = _plan(rs, run_id, cfg, goal, repo, cap, imp, recall_plan)
         if plan.get("blocked"):
             return rs.finish(run_id, "blocked", reason=(
                 "Stopped at Plan: " + plan["blocked"]), next_action=(
@@ -443,35 +602,80 @@ def execute(run_id: str, index_db: str) -> None:
                              reason="The planning model call failed",
                              next_action="Check the model with Test in Settings.")
 
-        built = _build(rs, run_id, cfg, idx, repo, goal, plan["text"], target, recall)
-        if built.get("blocked"):
-            return rs.finish(run_id, "blocked",
-                             reason="Stopped at Build: " + built["blocked"],
-                             next_action=f"Make the working tree readable at "
-                                         f"/repos/{repo}, then run again.")
-        if built.get("error"):
-            return rs.finish(run_id, "failed", error=built["error"],
-                             reason="Build did not produce usable files",
-                             next_action="Inspect the Build events — the raw model "
-                                         "output is attached.")
-
-        verified = _verify(rs, run_id, built)
-        if verified.get("problems"):
-            # Remember the shape of the mistake so the next run is warned about
-            # it before it writes, not after.
-            remember_verify_problems(mem, repo, run_id, verified["problems"])
-
-        reviewed = ship.review(rs, run_id, built, verified, root, imp)
-        if not reviewed.get("ok"):
-            return rs.finish(run_id, "incomplete",
-                             reason="Nothing was produced to review.",
-                             next_action="Check the Build phase output.")
-
         origin = idx.db.execute("SELECT origin FROM repos WHERE name=?",
                                 (repo,)).fetchone()
         origin = origin["origin"] if origin else None
+        import forge.runs.pr_review as _PRR
+
+        # Build → verify → review, looping to AUTO-REVISE when the review finds
+        # blocking issues, so a human approves refined work rather than a first
+        # draft. Bounded by AUTO_REVISE_ROUNDS to cap cost; whatever is unresolved
+        # after that is surfaced at the gate for the human to decide.
+        AUTO_REVISE_ROUNDS = 10   # keep revising until the review is clean …
+        feedback, built, reviewed, review_out, rounds = None, {}, {}, {}, 0
+        prev_blocking = None      # … or a round stops reducing findings (no progress)
+        while True:
+            built = _build(rs, run_id, cfg, idx, repo, goal, plan["text"], target,
+                           mem, feedback=feedback, sibling_ctx=sibling_ctx)
+            if built.get("blocked"):
+                return rs.finish(run_id, "blocked",
+                                 reason="Stopped at Build: " + built["blocked"],
+                                 next_action=f"Make the working tree readable at "
+                                             f"/repos/{repo}, then run again.")
+            if built.get("error"):
+                return rs.finish(run_id, "failed", error=built["error"],
+                                 reason="Build did not produce usable files",
+                                 next_action="Inspect the Build events — the raw "
+                                             "model output is attached.")
+            verified = _verify(rs, run_id, built, root)
+            if verified.get("problems"):
+                remember_verify_problems(mem, repo, run_id, verified["problems"],
+                                         sha=cap.get("overview", {}).get("head_sha"))
+            reviewed = ship.review(rs, run_id, built, verified, root, imp)
+            if not reviewed.get("ok"):
+                return rs.finish(run_id, "incomplete",
+                                 reason="Nothing was produced to review.",
+                                 next_action="Check the Build phase output.")
+            review_out = {}
+            try:
+                rs.set_phase(run_id, "review")
+                cr = imp.get("cross_repo") or []
+                note = ("reaches " + ", ".join(sorted({c["repo"] for c in cr}))
+                        if cr else "no cross-repo impact detected")
+                review_out = _PRR.review_built(
+                    cfg, repo, goal, reviewed["diffs"], note,
+                    on_event=lambda ph, k, t, dt=None: rs.emit(run_id, "review", k, t, dt),
+                    sibling_ctx=sibling_ctx)
+            except Exception as e:
+                rs.emit(run_id, "review", "warn",
+                        f"review pass skipped: {type(e).__name__}", {"error": str(e)[:200]})
+            findings = review_out.get("findings") or []
+            blocking = [f for f in findings
+                        if str(f.get("severity", "")).lower() in ("high", "medium")
+                        or (f.get("confidence") or 0) >= 60]
+            rounds += 1
+            review_out["rounds"] = rounds
+            rs.emit(run_id, "review", "done",
+                    f"Review round {rounds}: {len(findings)} finding(s), "
+                    f"{len(blocking)} blocking · verdict {review_out.get('verdict', '—')}",
+                    review_out)
+            stalled = prev_blocking is not None and len(blocking) >= prev_blocking
+            if not blocking or rounds > AUTO_REVISE_ROUNDS or stalled:
+                if blocking:
+                    why = ("it stopped reducing findings" if stalled
+                           else f"after {rounds - 1} auto-revise round(s)")
+                    rs.emit(run_id, "review", "warn",
+                            f"{len(blocking)} finding(s) remain — {why} — left for "
+                            f"your decision", level="warn")
+                break
+            prev_blocking = len(blocking)
+            rs.emit(run_id, "review", "step",
+                    f"Auto-revising to fix {len(blocking)} finding(s) — round {rounds + 1}")
+            feedback = _revise_feedback(reviewed["diffs"], blocking)
+
+        review_out["auto_revised"] = rounds - 1
         rs.set_state(run_id, {"built": built, "reviewed": reviewed,
-                              "origin": origin})
+                              "origin": origin, "review": review_out})
 
         # The run STOPS here. The PR phase is not reachable by falling through;
         # it runs only from an explicit approve call, which is what makes
@@ -481,11 +685,24 @@ def execute(run_id: str, index_db: str) -> None:
                 {"files": len(reviewed["diffs"]),
                  "additions": reviewed["additions"],
                  "deletions": reviewed["deletions"],
+                 "review_findings": len(review_out.get("findings") or []),
+                 "review_verdict": review_out.get("verdict"),
+                 "auto_revised": rounds - 1,
                  "github_target": origin or "none — this repo has no GitHub origin"})
         rs.finish(run_id, "awaiting_approval",
-                  reason="Built, checked and diffed. Nothing has been pushed.",
+                  reason=(f"Built, reviewed" + (f" and auto-revised {rounds - 1}×"
+                          if rounds > 1 else "") + ". Nothing has been pushed."),
                   next_action="Review the diff below, then Approve to open a PR, "
                               "or Reject to discard it.")
+        # An epic item that reaches its gate is "built enough" for its dependents to
+        # start — so the whole feature builds up front and waits for you in a batch,
+        # instead of one-approve-at-a-time.
+        if run.get("parent_id"):
+            try:
+                from . import epic as _EP
+                _EP.advance(run["parent_id"], index_db)
+            except Exception:
+                pass
     except Exception as e:
         rs.emit(run_id, None, "error", f"Run failed: {type(e).__name__}",
                 {"error": str(e)[:400], "trace": traceback.format_exc()[-1200:]},
@@ -496,6 +713,16 @@ def execute(run_id: str, index_db: str) -> None:
             idx.close()
         mem.close()
         cfg.close()
+        # If an epic child ended in a terminal non-gate state, tell the epic so it
+        # surfaces the failure instead of hanging on a stuck item.
+        try:
+            r2 = rs.get(run_id)
+            if r2 and r2.get("parent_id") and r2.get("status") in (
+                    "failed", "blocked", "incomplete"):
+                from . import epic as _EP
+                _EP.on_child_finished(run_id, index_db)
+        except Exception:
+            pass
         rs.close()
 
 

@@ -42,6 +42,23 @@ def _repo_id(store: Store, name: str) -> int:
     return row["id"]
 
 
+def _org_peers(store: Store, repo_id: int) -> list[int]:
+    """Repo ids in the same org (the GitHub owner from origin) as repo_id, minus
+    itself. Cross-repo reasoning is scoped to one org: a WirStrom repo must never
+    be coupled to an unrelated repo that merely shares a route string. A repo with
+    no origin is its own island and pairs only with other origin-less repos."""
+    row = store.db.execute("SELECT origin FROM repos WHERE id=?", (repo_id,)).fetchone()
+    origin = (row["origin"] if row else None) or ""
+    owner = origin.split("/", 1)[0] if "/" in origin else ""
+    if not owner:
+        return [r["id"] for r in store.db.execute(
+            "SELECT id FROM repos WHERE id != ? AND (origin IS NULL OR origin = '')",
+            (repo_id,))]
+    return [r["id"] for r in store.db.execute(
+        "SELECT id FROM repos WHERE id != ? AND origin LIKE ?",
+        (repo_id, owner + "/%"))]
+
+
 def _route_matches(store: Store, repo_id: int, paths: list[str]) -> list[dict]:
     """Other repos' path literals that extend one of ours.
 
@@ -52,15 +69,19 @@ def _route_matches(store: Store, repo_id: int, paths: list[str]) -> list[dict]:
     """
     if not paths:
         return []
+    peers = _org_peers(store, repo_id)
+    if not peers:                        # nothing else in this org to couple to
+        return []
     own_literals = {r["value"] for r in store.db.execute(
         "SELECT DISTINCT value FROM literals WHERE repo_id=?", (repo_id,))}
 
+    ph = ",".join("?" * len(peers))
     rows = store.db.execute(
         "SELECT l.value, l.line, l.repo_id, f.path AS file, r.name AS repo"
         "  FROM literals l"
         "  JOIN files f ON f.id = l.file_id"
         "  JOIN repos r ON r.id = l.repo_id"
-        " WHERE l.repo_id != ?", (repo_id,)).fetchall()
+        f" WHERE l.repo_id IN ({ph})", tuple(peers)).fetchall()
 
     out: list[dict] = []
     for row in rows:
@@ -99,7 +120,11 @@ def _name_matches(store: Store, repo_id: int, names: list[str]) -> list[dict]:
     """Same name, other repo — either defined there too, or called there."""
     if not names:
         return []
+    peers = _org_peers(store, repo_id)
+    if not peers:                        # nothing else in this org to couple to
+        return []
     qs = ",".join("?" * len(names))
+    ph = ",".join("?" * len(peers))
     out: list[dict] = []
 
     for row in store.db.execute(
@@ -107,8 +132,8 @@ def _name_matches(store: Store, repo_id: int, names: list[str]) -> list[dict]:
         f"       r.name AS repo"
         f"  FROM symbols s JOIN files f ON f.id = s.file_id"
         f"  JOIN repos r ON r.id = s.repo_id"
-        f" WHERE s.repo_id != ? AND s.name IN ({qs})"
-        f" LIMIT 60", (repo_id, *names)):
+        f" WHERE s.repo_id IN ({ph}) AND s.name IN ({qs})"
+        f" LIMIT 60", (*peers, *names)):
         out.append({"repo": row["repo"], "file": row["file"],
                     "line": row["start_line"], "name": row["name"],
                     "what": f"also defined here as {row['kind']} {row['qualname']}",
@@ -118,8 +143,8 @@ def _name_matches(store: Store, repo_id: int, names: list[str]) -> list[dict]:
         f"SELECT r2.name AS repo, f.path AS file, rf.line, rf.name"
         f"  FROM refs rf JOIN files f ON f.id = rf.file_id"
         f"  JOIN repos r2 ON r2.id = rf.repo_id"
-        f" WHERE rf.repo_id != ? AND rf.dst_symbol_id IS NULL"
-        f"   AND rf.name IN ({qs}) LIMIT 60", (repo_id, *names)):
+        f" WHERE rf.repo_id IN ({ph}) AND rf.dst_symbol_id IS NULL"
+        f"   AND rf.name IN ({qs}) LIMIT 60", (*peers, *names)):
         out.append({"repo": row["repo"], "file": row["file"],
                     "line": row["line"], "name": row["name"],
                     "what": "called here, resolving to nothing in that repo",

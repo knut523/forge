@@ -6,10 +6,14 @@
 <title>forge — code index</title>
 <style>
   :root{
-    --bg:#0e1013; --panel:#161a20; --panel2:#1c222a; --line:#272e38;
-    --ink:#e6e9ee; --ink2:#9aa4b2; --ink3:#6b7684;
-    --accent:#f0883e;
-    --hi:#3fb950; --med:#d29922; --lo:#8b949e;
+    /* Light theme. Same variable names as the old dark palette, so every rule below is untouched;
+       only these values flip. Ink is dark-on-light and the accent is deepened a touch so it holds
+       contrast on white. */
+    --bg:#f4f6f9; --panel:#ffffff; --panel2:#eef1f6; --line:#e3e8ef;
+    --ink:#1b2530; --ink2:#586675; --ink3:#8a95a4;
+    --accent:#e8720a;
+    --hi:#1a9e4b; --med:#b07817; --lo:#7a8696;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.04);
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box}
@@ -20,23 +24,38 @@
      Everything that lays out children opts them back out of that. */
   .split>*,.grid>*,.item>*,.row>*,.ev2>*,.link>*,.runrow>*{min-width:0}
   a{color:var(--accent);text-decoration:none}
-  header{display:flex;align-items:center;gap:14px;padding:14px 20px;
-         border-bottom:1px solid var(--line);background:var(--panel);
-         position:sticky;top:0;z-index:10}
+  .app{display:flex;min-height:100vh;align-items:stretch}
+  .side{width:214px;flex:none;background:var(--panel);border-right:1px solid var(--line);
+        padding:16px 12px;display:flex;flex-direction:column;gap:12px;
+        position:sticky;top:0;height:100vh;overflow:auto}
+  .brand{display:flex;align-items:center;gap:10px;padding:2px 6px 2px}
+  .side #orgsel{width:100%;flex:none}
+  .main-wrap{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{padding:11px 24px;border-bottom:1px solid var(--line);background:var(--panel);
+          position:sticky;top:0;z-index:10;color:var(--ink3);font-size:12.5px}
+  .navgroup{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--ink3);
+            padding:12px 10px 3px;font-weight:600}
   .logo{width:26px;height:26px;border-radius:7px;flex:none;
         background:linear-gradient(135deg,var(--accent),#b85c1d);
         display:grid;place-items:center;font-weight:700;color:#1a1005;font-size:15px}
   h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
   .sub{color:var(--ink3);font-size:12px}
-  nav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
-  nav button{background:transparent;border:1px solid transparent;color:var(--ink2);
-    padding:6px 13px;border-radius:7px;cursor:pointer;font-size:13px;font-family:inherit}
-  nav button:hover{color:var(--ink);background:var(--panel2)}
-  nav button.on{background:var(--panel2);color:var(--ink);border-color:var(--line)}
-  main{padding:20px;max-width:1080px;margin:0 auto;width:100%}
+  .side nav{display:flex;flex-direction:column;gap:2px}
+  .side nav button{width:100%;text-align:left;background:transparent;border:1px solid transparent;
+    color:var(--ink2);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13.5px;font-family:inherit}
+  .side nav button:hover{color:var(--ink);background:var(--panel2)}
+  .side nav button.on{background:var(--accent);color:#fff;border-color:transparent;font-weight:600}
+  main{padding:22px 24px;max-width:1120px;margin:0;width:100%}
+  @media(max-width:760px){
+    .app{flex-direction:column}
+    .side{width:auto;height:auto;position:static;flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px}
+    .side #orgsel{width:auto}
+    .side nav{flex-direction:row;flex-wrap:wrap}
+    .navgroup{display:none}
+  }
   .grid{display:grid;gap:14px;
         grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr))}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px;box-shadow:var(--shadow)}
   .card h3{margin:0 0 10px;font-size:14px;font-weight:600}
   .kv{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:13px}
   .kv span:first-child{color:var(--ink3)}
@@ -50,7 +69,7 @@
   button.go{background:var(--accent);color:#1a1005;border:none;padding:9px 17px;
     border-radius:8px;font-weight:600;cursor:pointer;font-family:inherit;font-size:13px}
   button.go:hover{filter:brightness(1.1)}
-  .list{background:var(--panel);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .list{background:var(--panel);border:1px solid var(--line);border-radius:11px;overflow:hidden;box-shadow:var(--shadow)}
   .item{padding:11px 15px;border-bottom:1px solid var(--line);cursor:pointer;
         display:flex;gap:11px;align-items:baseline}
   .item:last-child{border-bottom:none}
@@ -72,8 +91,8 @@
   .ev .p{color:var(--ink2)}
   .ev .arrow{color:var(--accent)}
   .muted{color:var(--ink3)}
-  .note{background:rgba(240,136,62,.08);border:1px solid rgba(240,136,62,.25);
-        color:#e8b48a;padding:10px 13px;border-radius:9px;font-size:13px;margin-top:12px}
+  .note{background:rgba(232,114,10,.08);border:1px solid rgba(232,114,10,.25);
+        color:#9a5310;padding:10px 13px;border-radius:9px;font-size:13px;margin-top:12px}
   .sec{margin:22px 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.8px;
        color:var(--ink3);font-weight:600}
   .link{display:flex;align-items:center;gap:10px;padding:10px 15px;
@@ -104,6 +123,22 @@
                padding-top:7px;border-top:1px solid rgba(240,136,62,.22)}
   .blocker .ba b{color:var(--accent)}
   .d-awaiting_approval{background:var(--accent)} .d-rejected{background:var(--ink3)}
+  .d-review{background:var(--accent)} .d-pending{background:var(--ink3)}
+  .viewbar{display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  .viewbar button{font-size:12px;padding:4px 13px;border:1px solid var(--line);border-radius:7px;
+    background:var(--panel);color:var(--ink2);cursor:pointer}
+  .viewbar button.on{background:var(--accent);color:#fff;border-color:transparent;font-weight:600}
+  .ecar{display:inline-block;width:15px;color:var(--ink3);cursor:pointer;user-select:none}
+  .ecar:hover{color:var(--accent)}
+  .split.board-mode{grid-template-columns:1fr}
+  .kanban{display:flex;gap:11px;padding:11px;align-items:flex-start}
+  .kcol{flex:1;min-width:0;background:var(--panel2);border-radius:10px;padding:8px 8px 4px}
+  .khead{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--ink3);padding:3px 6px 9px}
+  .kcard{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 9px;
+    margin-bottom:7px;cursor:pointer;display:flex;gap:8px}
+  .kcard:hover{border-color:var(--accent)}
+  .kcard.sel{box-shadow:inset 2px 0 0 var(--accent)}
   .gate{border:1px solid rgba(63,185,80,.32);background:rgba(63,185,80,.07);
         border-radius:10px;padding:13px 15px;margin-bottom:14px}
   .gate .gt{font-size:13px;color:var(--ink);line-height:1.5}
@@ -186,36 +221,47 @@
 </style>
 </head>
 <body>
-<header>
-  <div class="logo">f</div>
-  <div>
-    <h1>forge</h1>
-    <div class="sub" id="hdr">code index &amp; cross-repo wayfinder</div>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="logo">f</div><h1>forge</h1></div>
+    <select id="orgsel" title="Active organization (GitHub owner)">
+      <option value="">All orgs</option>
+    </select>
+    <nav>
+      <div class="navgroup">Work</div>
+      <button data-tab="coder" class="on">Build</button>
+      <button data-tab="activity">Activity</button>
+      <button data-tab="chat">Chat</button>
+      <div class="navgroup">Explore</div>
+      <button data-tab="code">Code</button>
+      <button data-tab="prs">PRs</button>
+      <button data-tab="memory">Memory</button>
+      <div class="navgroup">System</div>
+      <button data-tab="settings">Settings</button>
+    </nav>
+  </aside>
+  <div class="main-wrap">
+    <div class="topbar"><span id="hdr">code index &amp; cross-repo wayfinder</span></div>
+    <main>
+      <div id="coder"></div>
+      <div id="activity" hidden></div>
+      <div id="chat" hidden></div>
+      <div id="code" hidden>
+        <div class="subnav">
+          <button data-sub="repos" class="on">Overview</button>
+          <button data-sub="explore">Search</button>
+          <button data-sub="wayfinder">Impact</button>
+        </div>
+        <div id="repos"></div>
+        <div id="explore" hidden></div>
+        <div id="wayfinder" hidden></div>
+      </div>
+      <div id="prs" hidden></div>
+      <div id="memory" hidden></div>
+      <div id="settings" hidden></div>
+    </main>
   </div>
-  <nav>
-    <button data-tab="coder" class="on">Coder</button>
-    <button data-tab="code">Code</button>
-    <button data-tab="prs">PRs</button>
-    <button data-tab="memory">Memory</button>
-    <button data-tab="settings">Settings</button>
-  </nav>
-</header>
-<main>
-  <div id="coder"></div>
-  <div id="code" hidden>
-    <div class="subnav">
-      <button data-sub="repos" class="on">Overview</button>
-      <button data-sub="explore">Search</button>
-      <button data-sub="wayfinder">Impact</button>
-    </div>
-    <div id="repos"></div>
-    <div id="explore" hidden></div>
-    <div id="wayfinder" hidden></div>
-  </div>
-  <div id="prs" hidden></div>
-  <div id="memory" hidden></div>
-  <div id="settings" hidden></div>
-</main>
+</div>
 
 <script>
 const API = new URL('api/', document.baseURI).href.replace(/\/+$/, '');
@@ -232,14 +278,51 @@ async function get(p, q={}){
   return r.json();
 }
 
-let REPOS = [];
+let ALL_REPOS = [], REPOS = [];
+let ACTIVE_ORG = localStorage.getItem('forge_org') || null;
+let PR_SORT = localStorage.getItem('forge_prsort') || 'app';   // app | number | recent
+let ACT_POLL = null, ACT_OPEN = null, ACT_SEEN = 0;            // Activity view state
+
+/* The active org (a GitHub owner) is the axis that keeps prometheus work and
+   olaf work apart: it scopes the repo pickers everywhere and the PRs view. */
+function applyOrg(){
+  REPOS = ACTIVE_ORG
+    ? ALL_REPOS.filter(r => (r.origin || '').split('/')[0] === ACTIVE_ORG)
+    : ALL_REPOS;
+}
+
+async function loadOrgSwitcher(){
+  let orgs = [];
+  try{ orgs = (await get('/orgs')).orgs || []; }catch(e){}
+  const sel = $('#orgsel');
+  sel.innerHTML = '<option value="">All orgs</option>' + orgs.map(o=>
+    `<option value="${esc(o.org)}"${o.org===ACTIVE_ORG?' selected':''}>${esc(o.org)}`
+    + ` · ${o.repo_count}${o.token==='none'?' · no token':''}</option>`).join('');
+  if(ACTIVE_ORG && !orgs.some(o=>o.org===ACTIVE_ORG)){ ACTIVE_ORG=null; localStorage.removeItem('forge_org'); }
+  sel.value = ACTIVE_ORG || '';
+  sel.onchange = ()=>switchOrg(sel.value || null);
+}
+
+function switchOrg(org){
+  ACTIVE_ORG = org || null;
+  if(ACTIVE_ORG) localStorage.setItem('forge_org', ACTIVE_ORG);
+  else localStorage.removeItem('forge_org');
+  applyOrg();
+  coderShell(); exploreShell(); wayShell();       // rebuild pickers with the filter
+  const active = document.querySelector('nav button.on')?.dataset.tab;
+  ({coder:loadRuns, activity:loadActivity, prs:loadPRs, memory:loadMemory,
+    code:loadRepos, settings:loadSettings}[active] || (()=>{}))();
+}
 
 /* ── tabs ─────────────────────────────────────────────────────────── */
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
-  ['coder','code','prs','memory','settings'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
+  ['coder','activity','chat','code','prs','memory','settings'].forEach(t=>$('#'+t).hidden = (t!==b.dataset.tab));
+  if(b.dataset.tab!=='activity' && ACT_POLL){ clearInterval(ACT_POLL); ACT_POLL=null; }
   if(b.dataset.tab==='settings') loadSettings();
   if(b.dataset.tab==='coder') loadRuns();
+  if(b.dataset.tab==='activity') loadActivity();
+  if(b.dataset.tab==='chat') loadChat();
   if(b.dataset.tab==='prs') loadPRs();
   if(b.dataset.tab==='memory') loadMemory();
 });
@@ -249,28 +332,122 @@ document.querySelectorAll('.subnav button').forEach(b=>b.onclick=()=>{
   if(b.dataset.sub==='explore') $('#q')?.focus();
 });
 
+/* ── chat (multi-conversation) ────────────────────────────────────── */
+let CHATS = JSON.parse(localStorage.getItem('forge_chats') || 'null') || {};   // id -> {id,title,model,messages}
+let CHATID = localStorage.getItem('forge_chatid') || null;
+let CHATMODELS = [];
+function saveChats(){ localStorage.setItem('forge_chats', JSON.stringify(CHATS)); if(CHATID) localStorage.setItem('forge_chatid', CHATID); }
+function curChat(){ return CHATID ? CHATS[CHATID] : null; }
+function newChat(){ const id='c'+Date.now(); CHATS[id]={id,title:'New chat',model:null,messages:[]}; CHATID=id; saveChats(); return id; }
+
+async function loadChat(){
+  if(!CHATMODELS.length){ try{ CHATMODELS=(await get('/models')).filter(m=>m.enabled).map(m=>m.name); }catch(e){} }
+  if(!Object.keys(CHATS).length) newChat();
+  if(!CHATID || !CHATS[CHATID]) CHATID = Object.keys(CHATS).sort().reverse()[0];
+  renderChatShell();
+}
+function renderChatShell(){
+  const box = $('#chat');
+  const opts = ['<option value="">auto (best available)</option>']
+    .concat(CHATMODELS.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`)).join('');
+  box.innerHTML = `
+    <div class="split" style="grid-template-columns:210px 1fr">
+      <div class="list" style="display:flex;flex-direction:column;max-height:calc(100vh - 118px)">
+        <div style="padding:9px"><button class="go" id="cnew" style="width:100%">+ New chat</button></div>
+        <div id="chatlist" style="flex:1;overflow-y:auto"></div>
+      </div>
+      <div class="card" style="display:flex;flex-direction:column;height:calc(100vh - 150px);padding:0;overflow:hidden">
+        <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)">
+          <span class="muted" style="font-size:12px">Model</span>
+          <select id="chatmodel" style="flex:1">${opts}</select>
+        </div>
+        <div id="chatlog" style="flex:1;overflow-y:auto;padding:16px 18px"></div>
+        <div style="display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)">
+          <input id="chatin" placeholder="Ask anything…" style="flex:1" autocomplete="off">
+          <button class="go" id="chatsend">Send</button>
+        </div>
+      </div>
+    </div>`;
+  $('#cnew').onclick = ()=>{ newChat(); renderChatShell(); };
+  const c = curChat();
+  $('#chatmodel').value = (c && c.model) || '';
+  $('#chatmodel').onchange = e=>{ if(curChat()){ curChat().model = e.target.value || null; saveChats(); } };
+  $('#chatsend').onclick = sendChat;
+  $('#chatin').onkeydown = e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); } };
+  renderChatList(); renderChat(); $('#chatin').focus();
+}
+function renderChatList(){
+  const box = $('#chatlist'); if(!box) return; box.innerHTML='';
+  Object.keys(CHATS).sort().reverse().forEach(id=>{
+    const c = CHATS[id];
+    const row = el(`<div class="runrow${id===CHATID?' sel':''}" style="align-items:center">
+        <div style="flex:1;min-width:0"><div class="rg" style="font-size:12.5px">${esc(c.title||'New chat')}</div></div>
+        <span class="cdel" title="delete" style="color:var(--ink3);cursor:pointer;padding:0 5px;font-size:15px">×</span></div>`);
+    row.onclick = ()=>{ CHATID=id; saveChats(); renderChatShell(); };
+    row.querySelector('.cdel').onclick = (e)=>{ e.stopPropagation(); delete CHATS[id];
+      if(CHATID===id) CHATID = Object.keys(CHATS).sort().reverse()[0] || null;
+      if(!CHATID) newChat(); saveChats(); renderChatShell(); };
+    box.appendChild(row);
+  });
+}
+function renderChat(){
+  const log = $('#chatlog'); if(!log) return; const c = curChat();
+  const msgs = c ? c.messages : [];
+  if(!msgs.length){ log.innerHTML = `<div class="empty">Start a conversation — runs on forge's model.</div>`; return; }
+  log.innerHTML = '';
+  msgs.forEach(m=>{
+    const me = m.role==='user';
+    log.appendChild(el(`<div style="margin:0 0 14px;display:flex;${me?'justify-content:flex-end':''}">
+      <div style="max-width:78%;padding:9px 13px;border-radius:12px;white-space:pre-wrap;font-size:13.5px;line-height:1.55;
+        ${me?'background:var(--accent);color:#1a1005':'background:var(--panel2);color:var(--ink)'}">${esc(m.content)}</div></div>`));
+  });
+  log.scrollTop = log.scrollHeight;
+}
+async function sendChat(){
+  const c = curChat(), inp = $('#chatin'); if(!c || !inp) return;
+  const q = inp.value.trim(); if(!q) return;
+  inp.value=''; inp.disabled=true;
+  c.messages.push({role:'user', content:q});
+  if(!c.title || c.title==='New chat') c.title = q.slice(0,42);
+  c.messages.push({role:'assistant', content:'…'}); saveChats(); renderChatList(); renderChat();
+  try{
+    const r = await send('POST','/chat',{messages: c.messages.slice(0,-1), model: c.model||undefined});
+    c.messages[c.messages.length-1].content = r.text || '(no response)';
+  }catch(e){ c.messages[c.messages.length-1].content = '⚠ '+e.message; }
+  saveChats(); renderChat(); inp.disabled=false; inp.focus();
+}
+
 /* ── repos ────────────────────────────────────────────────────────── */
 async function loadRepos(){
   const box = $('#repos');
   box.innerHTML = '<div class="spin">loading index…</div>';
   try{
-    REPOS = await get('/repos');
-    if(!REPOS.length){ box.innerHTML='<div class="empty">Nothing indexed yet.</div>'; return; }
-    $('#hdr').textContent = REPOS.length+' repo'+(REPOS.length>1?'s':'')+' indexed';
-    box.innerHTML = '<div class="sec">Indexed repositories</div><div class="grid" id="rg"></div>';
-    REPOS.forEach(r=>$('#rg').appendChild(el(`
-      <div class="card">
-        <h3>${esc(r.name)}</h3>
-        <div class="kv"><span>files</span><span>${num(r.file_count)}</span></div>
-        <div class="kv"><span>symbols</span><span>${num(r.symbol_count)}</span></div>
-        <div class="kv"><span>edges</span><span>${num(r.ref_count)}</span></div>
-        <div class="kv"><span>resolved</span><span>${r.resolved_pct}%</span></div>
-        <div class="kv"><span>branch</span><span>${esc(r.branch||'—')}</span></div>
-        <div class="kv"><span>indexed</span><span>${esc((r.indexed_at||'').replace('T',' ').replace('+00:00',''))}</span></div>
-      </div>`)));
+    ALL_REPOS = await get('/repos'); applyOrg();
+    if(!REPOS.length){ box.innerHTML=`<div class="empty">Nothing indexed${ACTIVE_ORG?` for ${esc(ACTIVE_ORG)}`:''} yet.</div>`; return; }
+    $('#hdr').textContent = REPOS.length+' repo'+(REPOS.length>1?'s':'')+' indexed'+(ACTIVE_ORG?` · ${ACTIVE_ORG}`:'');
+    box.innerHTML = '';
+    const byOrg = {};
+    REPOS.forEach(r=>{ const o=(r.origin||'').split('/')[0]||'(no origin)'; (byOrg[o]=byOrg[o]||[]).push(r); });
+    Object.keys(byOrg).sort().forEach(o=>{
+      box.appendChild(el(`<div class="sec">${esc(o)} · ${byOrg[o].length} repo(s)</div>`));
+      const grid = el('<div class="grid"></div>');
+      byOrg[o].forEach(r=>grid.appendChild(el(`
+        <div class="card">
+          <h3>${esc(r.name)}</h3>
+          <div class="kv"><span>origin</span><span>${esc(r.origin||'—')}</span></div>
+          <div class="kv"><span>files</span><span>${num(r.file_count)}</span></div>
+          <div class="kv"><span>symbols</span><span>${num(r.symbol_count)}</span></div>
+          <div class="kv"><span>edges</span><span>${num(r.ref_count)}</span></div>
+          <div class="kv"><span>resolved</span><span>${r.resolved_pct}%</span></div>
+          <div class="kv"><span>branch</span><span>${esc(r.branch||'—')}</span></div>
+          <div class="kv"><span>indexed</span><span>${esc((r.indexed_at||'').replace('T',' ').replace('+00:00',''))}</span></div>
+        </div>`)));
+      box.appendChild(grid);
+    });
 
-    const links = await get('/links');
-    box.appendChild(el('<div class="sec">Cross-repo coupling &mdash; shared URL routes</div>'));
+    let links = await get('/links');
+    if(ACTIVE_ORG){ const names=new Set(REPOS.map(r=>r.name)); links = links.filter(l=>names.has(l.from)); }
+    box.appendChild(el(`<div class="sec">Cross-repo coupling${ACTIVE_ORG?` · ${esc(ACTIVE_ORG)}`:''} &mdash; shared URL routes (within the org)</div>`));
     if(!links.length){
       box.appendChild(el('<div class="list"><div class="empty">No route coupling found between the indexed repos.</div></div>'));
       return;
@@ -427,6 +604,8 @@ const GLYPH = {step:['▸','var(--accent)'], metric:['▦','var(--ink2)'], findi
   diff:['±','var(--accent)'], file:['▸','var(--ink2)']};
 let PHASES = [], EPHASES = [], CUR = null, POLL = null, SEEN = 0, EVENTS = [],
     FILTER = 'all', ITEMS = null;
+let VIEW = localStorage.getItem('forge_view') || 'tree';   // 'tree' | 'board'
+let EXPANDED = new Set(JSON.parse(localStorage.getItem('forge_expanded') || '[]'));  // epics shown open (default collapsed)
 
 function flat(v){
   if(v==null) return '';
@@ -474,48 +653,65 @@ function body(d){
 }
 
 function coderShell(){
+  const repoChecks = REPOS.map(r=>`<label style="display:inline-flex;align-items:center;gap:5px;
+    margin:0 13px 7px 0;white-space:nowrap;font-size:12.5px"><input type="checkbox" class="crepo"
+    value="${esc(r.name)}"> ${esc(r.name)}</label>`).join('') || '<span class="muted">no indexed repo in this org</span>';
   $('#coder').innerHTML = `
-    <div class="card" style="margin-bottom:16px">
-      <div class="subnav" style="margin-bottom:12px">
-        <button data-mode="one" class="on">One change</button>
-        <button data-mode="feature">Feature</button>
+    <div class="card" style="margin-bottom:14px">
+      <input id="cgoal" placeholder="what should be built or changed?"
+             style="width:100%;box-sizing:border-box;margin-bottom:10px">
+      <div style="margin-bottom:9px">${repoChecks}</div>
+      <div class="row" style="margin:0;align-items:center">
+        <button class="go" id="cdetect" style="background:#33383f;color:#fff">Auto-detect repos</button>
+        <button class="go" id="cgo">Start</button>
+        <span class="muted" id="cmode" style="font-size:12px"></span>
       </div>
-      <div id="mode-one">
-        <div class="row" style="margin:0">
-          <select id="crepo" style="min-width:150px">${REPOS.map(r=>`<option>${esc(r.name)}</option>`).join('')}</select>
-          <input id="cgoal" placeholder="what should the coder build or change?" style="flex:2">
-          <input id="ctarget" placeholder="symbol or file to focus on (optional)" style="flex:1;min-width:180px">
-          <button class="go" id="cgo">Start run</button>
-        </div>
-      </div>
-      <div id="mode-feature" hidden>
-        <div class="row" style="margin:0">
-          <input id="fgoal" placeholder="describe the whole feature — it gets split into minimal PRs" style="flex:2">
-          <button class="go" id="fgo">Plan the split</button>
-        </div>
-        <div class="hint" style="margin:11px 0 0">Repos it may touch:
-          ${REPOS.map(r=>`<label style="margin-right:12px;white-space:nowrap">
-            <input type="checkbox" class="frepo" value="${esc(r.name)}" style="flex:none;width:auto">
-            ${esc(r.name)}</label>`).join('')}
-          <div style="margin-top:8px">You approve the <b>split</b> before any code is
-          written; each piece is then built and reviewed on its own.</div>
-        </div>
-      </div>
+      <div class="hint" style="margin:10px 0 0">One repo = a single change (1 PR). Several = a feature —
+        forge frames it, accounts for coupling and splits it into minimal, stacked PRs (you approve the
+        split first). Auto-detect picks the likely repos from your goal.</div>
     </div>
-    <div class="split">
+    <div id="needsattn"></div>
+    <div class="split" id="codersplit">
       <div class="list" id="runlist"><div class="spin">…</div></div>
       <div id="rundetail"><div class="empty">Pick a run, or start one above.</div></div>
     </div>`;
-  $('#cgo').onclick = startRun;
-  $('#cgoal').onkeydown = e=>{ if(e.key==='Enter') startRun(); };
-  $('#coder').querySelectorAll('.subnav button').forEach(b=>b.onclick=()=>{
-    $('#coder').querySelectorAll('.subnav button')
-      .forEach(x=>x.classList.toggle('on',x===b));
-    $('#mode-one').hidden     = b.dataset.mode !== 'one';
-    $('#mode-feature').hidden = b.dataset.mode !== 'feature';
-  });
-  $('#fgo').onclick = startEpic;
-  $('#fgoal').onkeydown = e=>{ if(e.key==='Enter') startEpic(); };
+  const box = $('#coder');
+  const checked = ()=>Array.from(box.querySelectorAll('.crepo:checked')).map(c=>c.value);
+  const updMode = ()=>{
+    const n = checked().length;
+    $('#cmode').textContent = n===0 ? '' : (n===1 ? 'single change → 1 PR'
+                                                  : `feature across ${n} repos → split into PRs`);
+    $('#cgo').textContent = n>1 ? `Plan the split (${n})` : 'Start';
+  };
+  box.querySelectorAll('.crepo').forEach(c=>c.onchange = updMode); updMode();
+  $('#cdetect').onclick = ()=>detectInto('#cgoal', sug=>{
+    const s=new Set(sug); box.querySelectorAll('.crepo').forEach(c=>c.checked=s.has(c.value)); updMode();
+  }, '#cdetect');
+  const start = async ()=>{
+    const goal=$('#cgoal').value.trim(), repos=checked();
+    if(!goal||!repos.length){ $('#cmode').textContent='pick a goal and at least one repo'; return; }
+    $('#cgo').disabled=true;
+    try{
+      const id = repos.length===1 ? (await send('POST','/runs',{repo:repos[0], goal})).id
+                                  : (await send('POST','/epics',{goal, repos})).id;
+      $('#cgoal').value=''; box.querySelectorAll('.crepo').forEach(c=>c.checked=false); updMode();
+      await loadRuns(); openRun(id);
+    }catch(e){ alert(e.message); }
+    $('#cgo').disabled=false;
+  };
+  $('#cgo').onclick = start;
+  $('#cgoal').onkeydown = e=>{ if(e.key==='Enter') start(); };
+}
+
+async function detectInto(goalSel, apply, btnSel){
+  const goal = $(goalSel).value.trim();
+  if(!goal){ $(goalSel).focus(); return; }
+  const b = $(btnSel); b.disabled = true; const label = b.textContent; b.textContent = 'detecting…';
+  try{
+    const r = await send('POST','/detect-repos',{goal, org: ACTIVE_ORG});
+    apply((r.suggested||[]).map(s=>s.repo));
+  }catch(e){ alert(e.message); }
+  b.disabled = false; b.textContent = label;
 }
 
 async function startEpic(){
@@ -576,27 +772,125 @@ async function loadRuns(){
     EPHASES = await get('/phases',{kind:'epic'}).catch(()=>[]);
   }
   const list = $('#runlist');
+  const sp = $('#codersplit'); if(sp) sp.classList.toggle('board-mode', VIEW==='board');
   try{
-    const runs = await get('/runs',{limit:60});
-    if(!runs.length){ list.innerHTML='<div class="empty">No runs yet.</div>'; return; }
-    list.innerHTML='';
-    let lastRepo = null;
-    runs.forEach(r=>{
-      if(r.repo !== lastRepo){                       // grouped by repo, not one flat pile
-        list.appendChild(el(`<div class="phhdr" style="padding-left:13px">${esc(r.repo)}</div>`));
-        lastRepo = r.repo;
-      }
+    let runs = await get('/runs',{limit:60});
+    runs = runs.filter(x=>x.kind!=='review');       // reviews have their own live view in PRs
+    if(ACTIVE_ORG){ const names=new Set(REPOS.map(r=>r.name)); runs = runs.filter(x=>names.has(x.repo)); }
+    list.innerHTML=''; const attn = $('#needsattn'); if(attn) attn.innerHTML='';
+    const bar = el(`<div class="viewbar">
+        <button data-v="tree" class="${VIEW==='tree'?'on':''}">Tree</button>
+        <button data-v="board" class="${VIEW==='board'?'on':''}">Board</button></div>`);
+    bar.querySelectorAll('button').forEach(b=>b.onclick=()=>{ VIEW=b.dataset.v; localStorage.setItem('forge_view',VIEW); loadRuns(); });
+    list.appendChild(bar);
+    if(!runs.length){ list.appendChild(el(`<div class="empty">No runs${ACTIVE_ORG?` for ${esc(ACTIVE_ORG)}`:''} yet.</div>`)); return; }
+    const runById = Object.fromEntries(runs.map(r=>[r.id, r]));
+    const epics = runs.filter(r=>r.kind==='epic');
+    const epicItems = {};                            // fetch each epic's items once, used by both views
+    await Promise.all(epics.map(async ep=>{ try{ epicItems[ep.id]=(await get(`/runs/${ep.id}/items`)).items||[]; }catch(e){ epicItems[ep.id]=[]; } }));
+    if(VIEW==='board') renderBoard(list, runs, runById, epics, epicItems);
+    else               renderTree(list, runs, runById, epics, epicItems, attn);
+  }catch(e){ list.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+function renderTree(list, runs, runById, epics, epicItems, attn){
+  const pending = runs.filter(r=>r.status==='awaiting_approval');
+  if(pending.length && attn){
+    const card = el(`<div class="card" style="border:1px solid var(--accent);background:rgba(232,114,10,.06);padding:12px 14px;margin-bottom:14px">
+      <div class="sec" style="margin:0 0 8px;color:var(--accent)">⏳ Needs your attention · ${pending.length}</div></div>`);
+    pending.forEach(r=>{
+      const row = el(`<div class="runrow${CUR===r.id?' sel':''}" data-id="${r.id}" style="border-radius:8px">
+          <div class="dot d-${esc(r.status)}"></div>
+          <div style="min-width:0;flex:1">
+            <div class="rg">${esc(r.goal)}</div>
+            <div class="rmeta">${esc(r.repo)} · click to review &amp; approve${r.parent_goal?' · ↳ '+esc(r.parent_goal.split('\n')[0].slice(0,34)):''}</div>
+          </div></div>`);
+      row.onclick = ()=>openRun(r.id);
+      card.appendChild(row);
+    });
+    attn.appendChild(card);
+  }
+  const rest = runs.filter(r=>r.status!=='awaiting_approval');
+  const eps = rest.filter(r=>r.kind==='epic');
+  const standalone = rest.filter(r=>r.kind!=='epic' && !r.parent_id);
+  for(const ep of eps){
+    const items = epicItems[ep.id] || [];
+    const open = EXPANDED.has(ep.id);              // epics default collapsed — click ▸ to see the steps
+    const head = el(`<div class="runrow${CUR===ep.id?' sel':''}" data-id="${ep.id}" style="background:var(--panel2)">
+        <div class="dot d-${esc(ep.status)}"></div>
+        <div style="min-width:0;flex:1">
+          <div class="rg"><span class="ecar">${open?'▾':'▸'}</span> ${esc(ep.goal.split('\n')[0].slice(0,56))}</div>
+          <div class="rmeta">feature · ${esc(ep.status)} · ${items.length} step${items.length!==1?'s':''}</div>
+        </div></div>`);
+    head.querySelector('.ecar').onclick = (e)=>{ e.stopPropagation();
+      if(open) EXPANDED.delete(ep.id); else EXPANDED.add(ep.id);
+      localStorage.setItem('forge_expanded', JSON.stringify([...EXPANDED])); loadRuns(); };
+    head.onclick = ()=>openRun(ep.id);
+    list.appendChild(head);
+    if(open) items.forEach(it=>{
+      const rid = it.run_id;
+      const st = (rid && runById[rid]) ? runById[rid].status : it.status;   // real child status
+      const row = el(`<div class="runrow${CUR===rid?' sel':''}" data-id="${rid||''}" style="padding-left:34px">
+          <div class="dot d-${esc(st)}"></div>
+          <div style="min-width:0;flex:1">
+            <div class="rg" style="font-size:12.5px">#${it.seq+1} ${esc(it.title.slice(0,58))}</div>
+            <div class="rmeta">${esc(it.repo)} · ${esc(st)}${st==='awaiting_approval'?' — approve':''}${it.depends_on.length?' · after #'+it.depends_on.map(d=>d+1).join(', #'):''}${rid?'':' · not started'}</div>
+          </div></div>`);
+      if(rid) row.onclick = ()=>openRun(rid);
+      list.appendChild(row);
+    });
+  }
+  if(standalone.length){
+    list.appendChild(el(`<div class="phhdr" style="padding-left:13px">Single changes</div>`));
+    standalone.forEach(r=>{
       const row = el(`<div class="runrow${CUR===r.id?' sel':''}" data-id="${r.id}">
           <div class="dot d-${esc(r.status)}"></div>
           <div style="min-width:0">
             <div class="rg">${esc(r.goal)}</div>
             <div class="rmeta">${esc(r.status)}${r.phase?' · '+esc(r.phase):''} · ${esc((r.created_at||'').slice(5,16).replace('T',' '))}</div>
-          </div>
-        </div>`);
+          </div></div>`);
       row.onclick = ()=>openRun(r.id);
       list.appendChild(row);
     });
-  }catch(e){ list.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  }
+}
+
+function bucketOf(st){                              // map every run status onto the three kanban lanes
+  if(st==='complete') return 'done';
+  if(!st || st==='pending' || st==='queued' || st==='not_started') return 'todo';
+  return 'doing';   // running, review, awaiting_approval, blocked, failed, rejected, incomplete
+}
+function renderBoard(list, runs, runById, epics, epicItems){
+  const cards = [];
+  for(const ep of epics){
+    const eg = ep.goal.split('\n')[0].slice(0,32);
+    for(const it of (epicItems[ep.id]||[])){
+      const rid = it.run_id, cr = rid && runById[rid];
+      cards.push({id:rid, title:`#${it.seq+1} ${it.title}`, repo:it.repo,
+                  status:(cr?cr.status:it.status), epic:eg, pr:cr?cr.pr_url:null});
+    }
+  }
+  for(const r of runs.filter(r=>r.kind!=='epic' && !r.parent_id))
+    cards.push({id:r.id, title:r.goal.split('\n')[0], repo:r.repo, status:r.status, epic:null, pr:r.pr_url});
+  const cols = {todo:[], doing:[], done:[]};
+  cards.forEach(c=>cols[bucketOf(c.status)].push(c));
+  const labels = {todo:'To do', doing:'In progress', done:'Done'};
+  const board = el(`<div class="kanban"></div>`);
+  ['todo','doing','done'].forEach(k=>{
+    const col = el(`<div class="kcol"><div class="khead">${labels[k]} · ${cols[k].length}</div></div>`);
+    cols[k].forEach(c=>{
+      const card = el(`<div class="kcard${CUR===c.id?' sel':''}">
+          <div class="dot d-${esc(c.status)}"></div>
+          <div style="min-width:0;flex:1">
+            <div class="rg" style="font-size:12px">${esc(c.title.slice(0,58))}</div>
+            <div class="rmeta">${esc(c.repo)}${c.epic?' · ↳ '+esc(c.epic):''}${c.status==='awaiting_approval'?' · approve':''}${c.pr?' · PR ✓':''}</div>
+          </div></div>`);
+      if(c.id) card.onclick = ()=>openRun(c.id);
+      col.appendChild(card);
+    });
+    board.appendChild(col);
+  });
+  list.appendChild(board);
 }
 
 async function openRun(id){
@@ -657,13 +951,37 @@ function renderRun(run){
                 incomplete:'b-medium', blocked:'b-medium', done:'b-high',
                 awaiting_approval:'b-medium', rejected:'b-low',
                 failed:'b-low'}[run.status] || 'b-low';
+  let ST = {};
+  try{ ST = run.state ? (typeof run.state==='string'?JSON.parse(run.state):run.state) : {}; }catch(e){}
+  const rv = ST.review || {};
+  const diffs = (ST.reviewed && ST.reviewed.diffs) || [];
+  const sevRank = {high:0,medium:1,low:2};
+  const findingsHtml = (rv.findings||[]).length ? `
+      <div class="sec" style="margin:12px 0 6px">Review · verdict <b>${esc(rv.verdict||'—')}</b> ·
+        ${rv.findings.length} finding(s)
+        <span class="muted" style="font-weight:400">${esc((rv.models||[]).join(', '))}${rv.verifier?' + verify':''}</span></div>
+      <div class="list">${rv.findings.slice().sort((a,b)=>(sevRank[a.severity]??3)-(sevRank[b.severity]??3)).map(f=>`
+        <div class="item" style="cursor:default"><span class="badge b-${esc(f.severity||'low')}">${esc(f.severity||'?')}</span>
+          <div style="min-width:0;flex:1"><div class="qn" style="font-family:var(--mono)">${esc((f.file||'')+(f.line?':'+f.line:''))}</div>
+          <div class="sig">${esc(f.detail||'')}</div></div></div>`).join('')}</div>`
+    : (run.status==='awaiting_approval' && !isEpic ? '<div class="hint" style="margin:12px 0 0">No review findings.</div>' : '');
+  const diffHtml = diffs.length ? `
+      <div class="sec" style="margin:12px 0 6px">Diff · ${diffs.length} file(s)</div>
+      ${diffs.map(d=>`<details style="margin-bottom:6px"><summary style="cursor:pointer"><code>${esc(d.path)}</code>
+        <span style="color:var(--hi)">+${d.additions}</span> <span style="color:#f85149">−${d.deletions}</span></summary>
+        <pre style="max-height:340px;overflow:auto;background:var(--panel2);padding:9px;border-radius:6px;font-size:12px;margin:6px 0 0">${esc((d.diff||'').slice(0,8000))}</pre></details>`).join('')}` : '';
+
   const gate = run.status === 'awaiting_approval' ? `
       <div class="gate">
         <div class="gt">${isEpic
           ? 'No code has been written yet. Approving the split runs each piece as its own change — and every one of them still stops for your review before its PR is opened.'
-          : 'Nothing has been pushed. Approving opens a pull request against <code>dev</code>, ready for review.'}</div>
+          : 'Nothing has been pushed. Review the findings and diff below, then Approve to open the PR, or send feedback to rebuild.'}</div>
+        ${isEpic ? '' : findingsHtml + diffHtml + `
+        <textarea id="fbk" placeholder="feedback for a revision (optional) — e.g. also handle the empty-string case, or rename X to Y"
+          style="width:100%;box-sizing:border-box;min-height:64px;margin:12px 0 0;font:inherit;font-size:13px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px"></textarea>`}
         <div class="row" style="margin:11px 0 0">
           <button class="go" id="okbtn">${isEpic?'Approve the split':'Approve &amp; open PR'}</button>
+          ${isEpic?'':'<button class="go" id="revbtn" style="background:var(--med);color:#fff">Revise with feedback</button>'}
           <button class="go" id="nobtn"
                   style="background:#33383f;color:var(--ink2)">Reject</button>
         </div>
@@ -693,6 +1011,10 @@ function renderRun(run){
         ${esc(run.repo)}${run.target?' · target '+esc(run.target):''}
         · model ${esc(run.model || 'none')} · ${esc((run.created_at||'').replace('T',' ').replace('+00:00',''))}
       </div>
+      ${run.parent_id?`<div class="note" style="display:flex;align-items:center;gap:10px;margin:0 0 12px">
+        <span style="flex:1">↳ Part of feature: <b>${esc((run.parent_goal||'an epic').split('\n')[0].slice(0,70))}</b></span>
+        <button class="go" style="padding:4px 10px;background:#e9edf3;color:var(--ink2)" onclick="openRun('${esc(run.parent_id)}')">Open feature</button>
+      </div>`:''}
       <div class="stepper">${steps}</div>
       ${prlink}${gate}${blocker}
       <div class="now">
@@ -727,6 +1049,15 @@ function renderRun(run){
     ok.disabled = no.disabled = true;
     try{ await send('POST',`/runs/${run.id}/reject`,{note}); openRun(run.id); }
     catch(e){ alert(e.message); ok.disabled = no.disabled = false; }
+  };
+  const rev = $('#revbtn');
+  if(rev) rev.onclick = async ()=>{
+    const note = ($('#fbk')?.value || '').trim();
+    if(!note){ $('#fbk')?.focus(); return; }
+    rev.disabled = ok.disabled = no.disabled = true; rev.textContent = 'rebuilding…';
+    try{ const r = await send('POST',`/runs/${run.id}/revise`,{note}); openRun(r.new_run); }
+    catch(e){ alert(e.message); rev.disabled = ok.disabled = no.disabled = false;
+              rev.textContent = 'Revise with feedback'; }
   };
 
   const tl = $('#tl');
@@ -846,10 +1177,14 @@ async function loadPRs(){
   const box = $('#prs');
   box.innerHTML = '<div class="spin">asking GitHub…</div>';
   let d;
-  try{ d = await get('/prs'); }
+  try{ d = await get('/prs', {org: ACTIVE_ORG}); }   // scoped by the header org switcher
   catch(e){ box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
 
   box.innerHTML = '';
+  box.appendChild(el(`<div class="hint" style="margin-bottom:12px">Showing
+    <b>${ACTIVE_ORG?esc(ACTIVE_ORG):'all orgs'}</b> · switch worlds with the selector
+    in the top bar.</div>`));
+
   if(d.why){
     box.appendChild(el(`<div class="blocker"><div class="bt">${esc(d.why)}</div>
       <div class="ba"><b>Note:</b> forge only ever uses the READ token here — listing
@@ -866,9 +1201,21 @@ async function loadPRs(){
     box.appendChild(el('<div class="list"><div class="empty">No open pull requests.</div></div>'));
     return;
   }
-  box.appendChild(el('<div class="sec">Open pull requests</div>'));
-  const list = el('<div class="list"></div>');
-  d.prs.forEach(p=>{
+
+  // ordering: by app (grouped), by number, or most-recent (backend order)
+  const bar = el('<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'
+    + '<span class="muted" style="font-size:12px">Order:</span></div>');
+  [['app','by app'],['number','by number'],['recent','recent']].forEach(([k,label])=>{
+    const on = PR_SORT===k;
+    const b = el(`<button style="border:1px solid var(--line);border-radius:999px;padding:4px 11px;
+      cursor:pointer;font:inherit;font-size:12px;background:${on?'var(--accent)':'var(--panel2)'};
+      color:${on?'#fff':'var(--ink)'}">${label}</button>`);
+    b.onclick = ()=>{ PR_SORT=k; localStorage.setItem('forge_prsort',k); loadPRs(); };
+    bar.appendChild(b);
+  });
+  box.appendChild(bar);
+
+  const mkRow = (p)=>{
     const row = el(`<div class="item">
         <span class="kind">#${p.number}</span>
         <div style="min-width:0;flex:1">
@@ -888,11 +1235,30 @@ async function loadPRs(){
       try{
         const [owner, name] = p.repo.split('/');
         det.innerHTML = prBody(await get(`/prs/${owner}/${name}/${p.number}`));
+        wireReview(det.querySelector('[data-rev]'), owner, name, p.number);
       }catch(e){ det.innerHTML = `<span class="badge b-low">failed</span> ${esc(e.message)}`; loaded=false; }
     };
-    list.appendChild(row); list.appendChild(det);
-  });
-  box.appendChild(list);
+    return [row, det];
+  };
+
+  if(PR_SORT==='app'){
+    const byRepo = {};
+    d.prs.forEach(p=>{ (byRepo[p.repo]=byRepo[p.repo]||[]).push(p); });
+    Object.keys(byRepo).sort().forEach(repo=>{
+      box.appendChild(el(`<div class="sec">${esc(repo.split('/')[1]||repo)} · ${byRepo[repo].length} open`
+        + `<span class="muted" style="font-weight:400"> · ${esc(repo)}</span></div>`));
+      const list = el('<div class="list"></div>');
+      byRepo[repo].sort((a,b)=>b.number-a.number).forEach(p=>{ const [r,dt]=mkRow(p); list.appendChild(r); list.appendChild(dt); });
+      box.appendChild(list);
+    });
+  }else{
+    const prs = d.prs.slice();
+    if(PR_SORT==='number') prs.sort((a,b)=>b.number-a.number);
+    box.appendChild(el(`<div class="sec">Open pull requests · ${prs.length}</div>`));
+    const list = el('<div class="list"></div>');
+    prs.forEach(p=>{ const [r,dt]=mkRow(p); list.appendChild(r); list.appendChild(dt); });
+    box.appendChild(list);
+  }
 }
 
 function prBody(d){
@@ -919,6 +1285,7 @@ function prBody(d){
       <td style="color:var(--hi)">+${f.additions}</td>
       <td style="color:#f85149">−${f.deletions}</td></tr>`).join('');
   return `
+    <div data-rev style="margin-bottom:14px"></div>
     <div style="margin-bottom:12px">
       <div class="sec" style="margin-top:0">Reaches other repos</div>
       ${impHtml}
@@ -929,6 +1296,193 @@ function prBody(d){
     <table>${files}</table>
     ${d.body?`<div class="sec">Description</div><div class="prose">${esc(d.body.slice(0,3000))}</div>`:''}
     <div style="margin-top:12px"><a href="${esc(d.url)}" target="_blank" rel="noopener">open on GitHub ↗</a></div>`;
+}
+
+/* ── PR review: draft (read-only) → edit → post (the gated write path) ─── */
+function wireReview(slot, owner, repo, number){
+  if(!slot) return;
+  slot.innerHTML = `
+    <button class="go" data-mode="light">Light review</button>
+    <button class="go" data-mode="full" style="background:#33383f;color:#fff">Full review</button>
+    <span class="muted" style="margin-left:8px;font-size:12px">light = one pass · full =
+    multi-model finders + adversarial verify (~1–2 min). Reads the diff, forge's cross-repo
+    impact and prior comments. Read-only until you Post.</span>`;
+  slot.querySelectorAll('[data-mode]').forEach(b=>b.onclick = async ()=>{
+    const mode = b.dataset.mode;
+    slot.querySelectorAll('[data-mode]').forEach(x=>x.disabled = true);
+    b.textContent = 'starting…';
+    let r;
+    try{ r = await send('POST', `/prs/${owner}/${repo}/${number}/review?mode=${mode}`); }
+    catch(e){ slot.innerHTML = `<div class="note">review failed: ${esc(e.message)}</div>
+      <button class="go" onclick="wireReview(this.closest('[data-rev]'),'${owner}','${repo}',${number})">try again</button>`; return; }
+    reviewRun(slot, owner, repo, number, r.run_id, mode);
+  });
+}
+
+/* Live task view for a review run — polls the run's events and shows each step
+   as it happens, then renders the draft + Post when the result arrives. */
+async function reviewRun(slot, owner, repo, number, runId, mode){
+  slot.innerHTML = `<div class="sec" style="margin-top:0;display:flex;align-items:center;gap:8px">
+      <span>forge ${esc(mode)} review · <span class="muted" id="rvstat">running…</span></span>
+      <button class="go" style="margin-left:auto;background:#e9edf3;color:var(--ink2);padding:4px 10px"
+        onclick="wireReview(this.closest('[data-rev]'),'${owner}','${repo}',${number})">Cancel</button>
+    </div>
+    <div class="list" id="rvlog"></div>`;
+  const log = slot.querySelector('#rvlog');
+  let seen = 0, finished = false;
+  const step = async ()=>{
+    let run, evs;
+    try{ [run, evs] = await Promise.all([get(`/runs/${runId}`), get(`/runs/${runId}/events`,{after:seen})]); }
+    catch(e){ return true; }
+    for(const e of evs){
+      seen = e.seq;
+      if(e.kind==='result'){
+        const rd = el('<div style="margin-top:14px"></div>');
+        slot.appendChild(rd);
+        renderReview(rd, owner, repo, number, e.detail);
+        finished = true;
+      }else if(e.kind==='error'){
+        log.appendChild(el(`<div class="note">${esc(e.title||'failed')}</div>`));
+      }else{
+        log.appendChild(el(`<div class="item" style="cursor:default">
+          <span class="kind">${esc(e.phase||'')}</span>
+          <div style="min-width:0;flex:1"><div class="sig">${esc(e.title||'')}</div></div>
+          <div class="loc">${esc((e.ts||'').slice(11,19))}</div></div>`));
+      }
+    }
+    const st = slot.querySelector('#rvstat'); if(st) st.textContent = finished?'done':run.status;
+    return finished || !['running','queued'].includes(run.status);
+  };
+  if(await step()) return;
+  const iv = setInterval(async ()=>{ if(await step()) clearInterval(iv); }, 1200);
+}
+
+function renderReview(slot, owner, repo, number, r){
+  const findings = r.findings || [];
+  const sev = findings.reduce((a,f)=>{const s=(f.severity||'low');a[s]=(a[s]||0)+1;return a;},{});
+  slot.innerHTML = '';
+  const prov = `${esc(r.mode||'')} check`
+    + (r.models?.length?` · ${esc(r.models.join(', '))}`:'')
+    + (r.verifier?` + verify(${esc(r.verifier)})`:'')
+    + (r.prior_comments?` · ${r.prior_comments} prior comment(s)`:'');
+  const head = el(`<div class="sec" style="margin-top:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span>forge review · <span class="muted" style="font-weight:400">${prov}</span>
+    · verdict: <b>${esc(r.verdict||'—')}</b> · ${findings.length} finding(s)
+    ${Object.entries(sev).map(([s,n])=>`<span class="badge b-${esc(s)}">${n} ${esc(s)}</span>`).join(' ')}</span>
+    <button class="go" style="margin-left:auto;background:#e9edf3;color:var(--ink2);padding:4px 10px"
+      onclick="wireReview(this.closest('[data-rev]'),'${owner}','${repo}',${number})">New review</button>
+  </div>`);
+  slot.appendChild(head);
+  if(findings.length){
+    const fl = el('<div class="list" style="margin-bottom:10px"></div>');
+    findings.forEach(f=>fl.appendChild(el(`<div class="item" style="cursor:default">
+      <span class="badge b-${esc(f.severity||'low')}">${esc(f.severity||'?')}</span>
+      <div style="min-width:0;flex:1">
+        <div class="qn" style="font-family:var(--mono)">${esc((f.file||'')+(f.line?':'+f.line:''))}</div>
+        <div class="sig">${esc(f.detail||'')}</div></div></div>`)));
+    slot.appendChild(fl);
+  }
+  slot.appendChild(el('<div class="sec">Draft comment — edit before posting</div>'));
+  const ta = el(`<textarea style="width:100%;min-height:200px;font:inherit;font-size:13px;
+    background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:8px;
+    padding:10px;box-sizing:border-box"></textarea>`);
+  ta.value = r.draft || '';
+  slot.appendChild(ta);
+  const bar = el('<div class="row" style="margin:10px 0 0;align-items:center"></div>');
+  const post = el('<button class="go">Post comment to GitHub</button>');
+  const copy = el('<button class="go" style="background:#e9edf3;color:var(--ink2)">Copy</button>');
+  const res = el('<span class="muted" style="margin-left:10px;font-size:12.5px"></span>');
+  copy.onclick = ()=>{ navigator.clipboard?.writeText(ta.value); res.textContent = 'copied'; };
+  post.onclick = async ()=>{
+    if(!confirm(`Post this comment to ${owner}/${repo}#${number} on GitHub?`)) return;
+    post.disabled = true; res.textContent = 'posting…';
+    try{
+      const o = await send('POST', `/prs/${owner}/${repo}/${number}/comment`, {body: ta.value});
+      res.innerHTML = `<span class="badge b-high">posted</span>
+        <a href="${esc(o.url)}" target="_blank" rel="noopener">view on GitHub ↗</a>`;
+      post.textContent = 'posted';
+    }catch(e){ res.innerHTML = `<span class="badge b-low">failed</span> ${esc(e.message)}`; post.disabled = false; }
+  };
+  bar.appendChild(post); bar.appendChild(copy); bar.appendChild(res);
+  slot.appendChild(bar);
+}
+
+/* ── Activity: one place to start a task and watch every step live ──── */
+async function loadActivity(){
+  const box = $('#activity');
+  box.innerHTML = `
+    <div class="sec" style="margin-top:0">Activity${ACTIVE_ORG?` · ${esc(ACTIVE_ORG)}`:''}</div>
+    <div class="hint" style="margin-bottom:14px">Everything running or recently run — builds, reviews and
+      epics. Start new work in <b>Build</b>; click a task here to watch it step by step.</div>
+    <div id="actrows"><div class="spin">…</div></div>
+    <div id="actdetail"></div>`;
+  await refreshActivity();
+  if(ACT_POLL) clearInterval(ACT_POLL);
+  ACT_POLL = setInterval(refreshActivity, 2000);
+}
+
+function openAct(id){
+  ACT_OPEN = id; ACT_SEEN = 0;
+  const d = $('#actdetail'); if(d) d.innerHTML = '';
+  refreshActivity();
+}
+
+// jump to the Build tab and open a run's gate (where diff + findings + Approve live)
+function goApprove(id){
+  const b = document.querySelector('nav button[data-tab="coder"]');
+  if(b) b.click();
+  setTimeout(()=>openRun(id), 80);
+}
+
+async function refreshActivity(){
+  const rows = $('#actrows'); if(!rows) return;              // tab left
+  let runs;
+  try{ runs = await get('/runs',{limit:40}); }catch(e){ return; }
+  if(ACTIVE_ORG){ const names = new Set(REPOS.map(r=>r.name)); runs = runs.filter(x=>names.has(x.repo)); }
+  const kindLabel = r => r.kind==='review' ? 'review' : (r.kind==='epic' ? 'epic' : 'build');
+  const mkRow = (r)=>{
+    const row = el(`<div class="item${ACT_OPEN===r.id?' sel':''}" style="cursor:pointer">
+      <span class="dot d-${esc(r.status)}"></span>
+      <div style="min-width:0;flex:1">
+        <div class="qn">${esc(r.goal)}</div>
+        <div class="sig">${kindLabel(r)} · ${esc(r.repo)} · ${esc(r.status)}${r.phase?' · '+esc(r.phase):''}${r.parent_goal?' · ↳ '+esc(r.parent_goal.split('\n')[0].slice(0,32)):''}</div>
+      </div>
+      <div class="loc">${esc(ago(r.updated_at||r.created_at))} ago</div></div>`);
+    row.onclick = ()=> r.status==='awaiting_approval' ? goApprove(r.id) : openAct(r.id);
+    return row;
+  };
+  rows.innerHTML = '';
+  if(!runs.length){ rows.innerHTML = '<div class="empty">No tasks yet — start one in Build.</div>'; }
+  [['Waiting for you', runs.filter(r=>r.status==='awaiting_approval')],
+   ['Running', runs.filter(r=>['running','queued'].includes(r.status))],
+   ['Recent', runs.filter(r=>!['awaiting_approval','running','queued'].includes(r.status)).slice(0,12)]
+  ].forEach(([label, group])=>{
+    if(!group.length) return;
+    rows.appendChild(el(`<div class="sec" style="margin:4px 0 6px">${label} · ${group.length}</div>`));
+    const list = el('<div class="list" style="margin-bottom:12px"></div>');
+    group.forEach(r=>list.appendChild(mkRow(r)));
+    rows.appendChild(list);
+  });
+  if(!ACT_OPEN) return;
+  let run, evs;
+  try{ [run, evs] = await Promise.all([get(`/runs/${ACT_OPEN}`), get(`/runs/${ACT_OPEN}/events`,{after:ACT_SEEN})]); }
+  catch(e){ return; }
+  let det = $('#actstream');
+  if(!det){
+    $('#actdetail').innerHTML = `<div class="sec">${esc(run.goal)} · <span class="muted" id="actst">${esc(run.status)}</span></div>`
+      + `<div class="list" id="actstream"></div>`;
+    det = $('#actstream');
+  }
+  const st = $('#actst'); if(st) st.textContent = run.status + (run.phase?' · '+run.phase:'');
+  evs.forEach(e=>{
+    ACT_SEEN = e.seq;
+    det.appendChild(el(`<div class="item" style="cursor:default">
+      <span class="kind">${esc(e.phase||e.kind||'')}</span>
+      <div style="min-width:0;flex:1"><div class="sig">${esc(e.title||'')}</div></div>
+      <div class="loc">${esc((e.ts||'').slice(11,19))}</div></div>`));
+    if(e.kind==='result' && e.detail && e.detail.draft)
+      det.appendChild(el(`<div class="note" style="white-space:pre-wrap;font-size:12.5px">${esc(e.detail.draft)}</div>`));
+  });
 }
 
 /* ── settings: credentials + models ───────────────────────────────── */
@@ -1091,7 +1645,8 @@ function secretCard(s){
 
 /* ── boot ─────────────────────────────────────────────────────────── */
 (async ()=>{
-  REPOS = await get('/repos').catch(()=>[]);
+  ALL_REPOS = await get('/repos').catch(()=>[]); applyOrg();
+  await loadOrgSwitcher();
   coderShell(); exploreShell(); wayShell();
   await loadRuns();
   loadRepos();                                  // fills the Repos tab in the background

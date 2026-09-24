@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd in ("org", "index-org"):
         from .indexer import github as GH
-        tok = GH.read_token()
+        tok = GH.read_token(a.org)
         try:
             repos = GH.list_org_repos(a.org, tok, include_forks=a.forks,
                                       include_archived=a.archived)

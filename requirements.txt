@@ -5,3 +5,4 @@ uvicorn[standard]>=0.32
 httpx>=0.27
 pydantic>=2.9
 cryptography>=43
+pytest>=8.0

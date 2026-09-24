@@ -17,15 +17,23 @@ exists solely so forge can reach the Claude bridge at `http://ide:8930`.
 ## The invariants — do not break these
 
 1. **Nothing reaches GitHub without a human approving that specific run.** This
-   is structural, not a rule to remember: the PR phase is unreachable by falling
-   through the pipeline, it runs only from an explicit approve call, and the
-   WRITE token is read in exactly one function (`runs/engine.py::ship_it`) after
-   the approval is already recorded. Do not read `GITHUB_WRITE` anywhere else.
+   is structural, not a rule to remember. `GITHUB_WRITE` is read in exactly two
+   functions, each reachable only from an explicit human action, never by falling
+   through a pipeline:
+   - `runs/engine.py::ship_it` — open a PR, after a run's approval is recorded.
+   - the `POST /api/prs/{owner}/{repo}/{number}/comment` handler in `api/app.py`
+     — post a review comment, only when a human clicks Post on a draft they have
+     seen and edited; it posts exactly that body and reads the token once, here.
+   Do not read `GITHUB_WRITE` anywhere else. Drafting a review (`runs/pr_review.py`)
+   is read-only and never touches the write token.
 
-2. **Two tokens.** Read token for cloning, indexing, listing PRs — everything
-   before the gate. Write token for push and PR only. `verify` checks a token
-   filed as read does not carry write scope, and says so plainly when GitHub
-   won't tell us (fine-grained tokens).
+2. **Two tokens.** Read token for cloning, indexing, listing PRs, and drafting a
+   review — everything before a gate. Write token for push, PR, and posting an
+   approved review comment only. Both read and write support a per-org key
+   (`github_read_token:<owner>` / `github_write_token:<owner>`) so prometheus work
+   and olaf work stay behind separate credentials, with the global key as
+   fallback. `verify` checks a token filed as read does not carry write scope, and
+   says so plainly when GitHub won't tell us (fine-grained tokens).
 
 3. **Precision over recall in the index.** An unresolved edge is visible in
    `resolved_pct` and can be reasoned about; a *wrong* edge silently lies to the

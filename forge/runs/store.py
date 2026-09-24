@@ -127,7 +127,7 @@ class RunStore:
         """Add columns introduced after the first runs were recorded."""
         have = {r["name"] for r in self.db.execute("PRAGMA table_info(runs)")}
         for col in ("stopped_reason", "next_action", "state", "pr_url",
-                    "kind", "parent_id"):
+                    "kind", "parent_id", "base_branch"):
             if col not in have:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
         self.db.execute("UPDATE runs SET kind='run' WHERE kind IS NULL")
@@ -178,6 +178,13 @@ class RunStore:
     # `state` carries what a later approval needs (the workspace, the diff, the
     # GitHub target) so the PR step does not have to re-derive any of it — and
     # so approving cannot quietly act on a different change than the one shown.
+    def set_base(self, run_id: str, branch: str) -> None:
+        """The branch this run's PR should target — set for a stacked item so its
+        PR opens against its dependency's branch instead of dev."""
+        self.db.execute("UPDATE runs SET base_branch=?, updated_at=? WHERE id=?",
+                        (branch, _now(), run_id))
+        self.db.commit()
+
     def set_state(self, run_id: str, state: dict) -> None:
         self.db.execute("UPDATE runs SET state=?, updated_at=? WHERE id=?",
                         (json.dumps(state, default=str), _now(), run_id))
