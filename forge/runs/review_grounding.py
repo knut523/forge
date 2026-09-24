@@ -487,14 +487,30 @@ def _past_review(repo_name: str | None, changed_files: list[str], cap: int = 8) 
         rows = pr_history.for_files(repo_name, changed_files, limit=cap)
     except Exception:
         return ""
-    out = []
+    out, seen = [], set()
     for r in rows:
         loc = r.get("path") or ""
         if r.get("line"):
             loc += f":{r['line']}"
         body = " ".join((r.get("body") or "").split())[:280]
         out.append(f"- @{r.get('author')} on {loc} (PR #{r.get('number')}): {body}")
-    return "\n".join(out)
+        seen.add(r.get("number"))
+    # Also the long review BODIES (path is null) that discuss these files by name —
+    # where the deepest findings live. FTS on each changed file's basename.
+    try:
+        for f in (changed_files or [])[:5]:
+            base = f.rsplit("/", 1)[-1]
+            if len(base) < 6:
+                continue
+            for r in pr_history.search(base, limit=2):
+                if r.get("number") in seen or base not in (r.get("body") or ""):
+                    continue
+                seen.add(r.get("number"))
+                body = " ".join((r.get("body") or "").split())[:300]
+                out.append(f"- @{r.get('author')} (PR #{r.get('number')}, mentions {base}): {body}")
+    except Exception:
+        pass
+    return "\n".join(out[:12])
 
 
 # ------------------------------------------------------------------ assemble
