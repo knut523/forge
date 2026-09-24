@@ -96,7 +96,7 @@ def _tool(call: dict, root: str, repo_name: str) -> str:
 
 def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
            changed_files: list[str], goal: str = "", grounding: str = "",
-           max_steps: int = 16, on_event=None, prepared: dict | None = None) -> dict:
+           max_steps: int = 26, on_event=None, prepared: dict | None = None) -> dict:
     """Run the agentic tool loop with `model`. Returns {findings, summary, verdict, steps}
     or {error}/{why}. Read-only: never writes or pushes.
 
@@ -123,27 +123,35 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
             if text is None:
                 return {"error": meta.get("error", "model call failed")}
             call = _extract_json(text) or {}
-            if call.get("done") or ("findings" in call and "tool" not in call):
+            # A verdict is: explicit done:true, OR any response carrying findings (with or
+            # without a verdict field) and no further tool call. The earlier check needed
+            # both findings AND no-tool, so a model that emitted findings while still
+            # nominally "going" produced an empty None verdict — fixed here.
+            is_verdict = (call.get("done") or "findings" in call) and not call.get("tool")
+            if is_verdict:
                 ev("agent", "info", f"done after {step+1} step(s)")
                 return {"findings": call.get("findings", []),
                         "summary": call.get("summary", ""),
-                        "verdict": call.get("verdict"), "steps": step + 1,
-                        "model": model.get("name")}
+                        "verdict": call.get("verdict") or (
+                            "changes-requested" if call.get("findings") else "pass"),
+                        "steps": step + 1, "model": model.get("name")}
             if not call.get("tool"):
                 convo += (f"\n\nYOU: {text.strip()[:400]}\n(That was not a valid action. "
-                          "Emit ONE JSON: a tool call or your done verdict.)")
+                          "Emit ONE JSON: a tool call, or your done verdict with findings.)")
                 continue
             ev("agent", "info", f"step {step+1}: {call.get('tool')} {call.get('path') or call.get('pattern') or call.get('paths') or ''}")
             result = _tool(call, root, repo_name)
             convo += f"\n\nYOU: {json.dumps(call)}\nRESULT:\n{result}\n\nNext action (one JSON):"
-        # out of steps — force a verdict
+        # out of steps — force a verdict from everything seen so far
         text, _ = llm.complete(model, token,
                                SYSTEM + "\n\nYou are out of investigation steps. Emit your "
                                "done verdict JSON NOW based on what you have seen.",
                                convo, max_tokens=1600)
         j = _extract_json(text or "") or {}
         return {"findings": j.get("findings", []), "summary": j.get("summary", ""),
-                "verdict": j.get("verdict"), "steps": max_steps, "model": model.get("name")}
+                "verdict": j.get("verdict") or (
+                    "changes-requested" if j.get("findings") else "pass"),
+                "steps": max_steps, "model": model.get("name")}
     finally:
         if own and scratch:
             shutil.rmtree(scratch, ignore_errors=True)
