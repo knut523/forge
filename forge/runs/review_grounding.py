@@ -58,6 +58,40 @@ def conventions(repo_name: str | None) -> str:
     return "\n\n".join(out)
 
 
+# ------------------------------------------------------------- repo rules (NL)
+_RULE_RX = re.compile(
+    r"\b(must not|must|never|always|do not|don'?t|required|forbidden|no exception|"
+    r"shall|only ever|has to|have to)\b", re.I)
+
+
+def rules(repo_name: str | None) -> list[str]:
+    """The repo's own imperative rules — the 'must / never / always' lines in
+    AGENTS.md/CLAUDE.md a change can violate — extracted so the review checks each
+    explicitly, the way a human cites 'AGENTS.md says a reported day is a Vienna day'.
+    Also pulls rules from a plan doc the diff cites (evolving rules live there)."""
+    text = conventions(repo_name)
+    docs = clone_dir(_DOCS_REPO)
+    if docs and (docs / "AGENTS.md").exists():
+        text += "\n" + _read(docs / "AGENTS.md", cap=8000)
+    out, seen = [], set()
+    for line in text.splitlines():
+        s = line.strip().lstrip("-*>#•").strip().strip("`").replace("**", "")
+        if not (16 <= len(s) <= 240) or not _RULE_RX.search(s):
+            continue
+        if "|" in s or "-->" in s or "<!--" in s:      # markdown table / HTML comment
+            continue
+        if not s[:1].isalpha():                         # fragments starting with (, `, etc.
+            continue
+        if s.endswith((",", "and", "the", "a", "which", "that", "—", "-", "to")):
+            continue                                    # obvious sentence fragment
+        k = s.lower()[:60]
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(s)
+    return out[:22]
+
+
 # ------------------------------------------------------------ acceptance criteria
 _ACC_HEAD = re.compile(
     r"^#{1,6}\s*(acceptance|akzeptanz|done when|definition of done|abnahme"
@@ -477,7 +511,13 @@ def build(repo_name: str | None, pr_body: str, diff: str,
     hist = history(repo_name, changed_files)
     notes = sanity(diff, changed_files)
     past = _past_review(repo_name, changed_files)
+    repo_rules = rules(repo_name)
     parts = []
+    if repo_rules:
+        rl = "\n".join(f"  - {r}" for r in repo_rules)
+        parts.append("REPO RULES (the repo's own must/never rules — verify the diff "
+                     "violates NONE of these; a violation is a finding even if the code "
+                     f"otherwise works):\n{rl}")
     if past:
         parts.append("PAST REVIEW COMMENTS on these files (human reviewers flagged this "
                      "area before — verify the change does not re-introduce or ignore any "
