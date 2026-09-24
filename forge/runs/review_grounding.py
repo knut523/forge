@@ -253,15 +253,27 @@ def ci_wiring(diff: str, repo_name: str | None, changed_files: list[str]) -> lis
                        f"invokes, or it passes once locally and never gates a merge."),
             "angle": "ci-wiring", "confidence": 70, "verdict": "plausible", "seed": True}
             for nt in new_tests[:8]]
+    wf = _workflow_scripts(d)
     findings = []
     for nt in new_tests[:12]:
-        if not _covered_by_any_script(nt, scripts):
+        covering = _covering_script(nt, scripts)
+        if not covering:
             findings.append({
                 "severity": "medium", "file": nt,
                 "detail": (f"`{nt}` is not reached by any test script in package.json "
                            f"({', '.join(sorted(scripts)[:6])}…). It runs locally and is "
                            f"never executed by CI. Add it to an existing suite (one line)."),
                 "angle": "ci-wiring", "confidence": 65, "verdict": "plausible", "seed": True})
+        elif wf and covering not in wf:
+            # The script exists but no GitHub workflow invokes it — this is how a test
+            # reaches main while never being run by the thing that gates merges.
+            findings.append({
+                "severity": "medium", "file": nt,
+                "detail": (f"`{nt}` runs under the `{covering}` script, but no GitHub "
+                           f"workflow invokes `{covering}` (workflows run: "
+                           f"{', '.join(sorted(wf)[:6]) or 'none'}). It passes locally and "
+                           f"CI never runs it — add `{covering}` to the PR/CI workflow."),
+                "angle": "ci-wiring", "confidence": 70, "verdict": "plausible", "seed": True})
     return findings
 
 
@@ -297,20 +309,62 @@ def _looks_like_test(name: str, cmd: str) -> bool:
     return ("test" in n or any(r in c for r in _RUNNERS))
 
 
-def _covered_by_any_script(test_path: str, scripts: dict) -> bool:
-    """Heuristic: a runner with no explicit path globs the project (covers it),
-    or a script names the file's directory / a parent."""
+def _covering_script(test_path: str, scripts: dict) -> str | None:
+    """The name of the first script that would run this test, or None. A runner with
+    no explicit path globs the project; otherwise a script naming the file's dir."""
     d = test_path.rsplit("/", 1)[0] if "/" in test_path else ""
-    for cmd in scripts.values():
+    for name, cmd in scripts.items():
         c = cmd.lower()
         names_a_path = bool(re.search(r"\b(tools|src|tests?|app|lib)/", c))
         if any(r in c for r in _RUNNERS) and not names_a_path:
-            return True          # runner globs the whole project
+            return name          # runner globs the whole project
         if d and d.lower() in c:
-            return True          # script targets this dir
+            return name          # script targets this dir
         if test_path.lower() in c:
-            return True
-    return False
+            return name
+    return None
+
+
+# ------------------------------------------------- CI workflow actually runs it
+def _workflow_scripts(repo_dir: Path) -> set[str]:
+    """Script names a GitHub workflow actually invokes (npm run X / pnpm X / yarn X).
+    A test in a package.json script that no workflow runs is not run by CI."""
+    wf = repo_dir / ".github" / "workflows"
+    names: set[str] = set()
+    if wf.is_dir():
+        for f in list(wf.glob("*.yml")) + list(wf.glob("*.yaml")):
+            t = _read(f, 30000)
+            for m in re.finditer(r"(?:npm run|pnpm(?:\s+run)?|yarn(?:\s+run)?)\s+([\w:.\-]+)", t):
+                names.add(m.group(1))
+    return names
+
+
+# ------------------------------------------------------- PII written to a log
+_PII = (r"recipient|e[-_]?mail\b|email|iban|bic|phone|telefon|address|adresse|"
+        r"vorname|nachname|geburts|zaehlpunkt|zählpunkt|kunden(?:name|nummer)")
+_LOG_PII = re.compile(
+    r"(console\.(?:log|error|warn|info|debug)|logger\.\w+|log\.\w+)\s*\([^)]*"
+    r"\$\{[^}]*(?:" + _PII + r")[^}]*\}", re.IGNORECASE)
+
+
+def pii_in_logs(diff: str) -> list[dict]:
+    """Added log statements that interpolate a personal-data field. A log line is
+    telemetry; per the repos' own rule personal data must not land there. Matches
+    an interpolated PII variable (not a static label), so it is high-signal."""
+    findings, cur = [], None
+    for ln in diff.splitlines():
+        if ln.startswith("+++ b/"):
+            cur = ln[6:].strip()
+            continue
+        if ln.startswith("+") and not ln.startswith("+++") and _LOG_PII.search(ln):
+            findings.append({
+                "severity": "medium", "file": cur,
+                "detail": ("This log statement interpolates a personal-data field "
+                           f"(`{ln.strip()[1:][:90]}`). A log/telemetry line is not an "
+                           "allowed home for personal data — log a hash or an id instead "
+                           "of the address/email/name."),
+                "angle": "security", "confidence": 70, "verdict": "plausible", "seed": True})
+    return findings[:6]
 
 
 # ------------------------------------------------------------- enclosing code
@@ -394,7 +448,9 @@ def build(repo_name: str | None, pr_body: str, diff: str,
     """Everything the review should be grounded in. Seed findings are the
     deterministic ones (reachability, CI-wiring) the LLM must carry."""
     acc = acceptance_criteria(pr_body, repo_name)
-    seeds = reachability(diff, repo_name, changed_files) + ci_wiring(diff, repo_name, changed_files)
+    seeds = (reachability(diff, repo_name, changed_files)
+             + ci_wiring(diff, repo_name, changed_files)
+             + pii_in_logs(diff))
     conv = conventions(repo_name)
     encl = enclosing(changed_files, repo_name)
     hist = history(repo_name, changed_files)
