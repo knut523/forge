@@ -109,6 +109,17 @@ before rework. Phase 1 is the core intervention (targets parity). Phase 2 target
 3. Scope for the first build session: P0 + Phase 1 is the natural first increment (proves
    whether strategy closes the gap and delivers the core intervention behind a real gate).
 
+## P0 RESULT (2026-09-25) — strategy is the bottleneck
+- **P0a model-swap on #181 (14 real findings):** minimax **0/14**, claude **1/14**. Both models
+  miss ~13/14 under the current single-blob adversarial strategy; the 1-vs-0 gap is noise, not a
+  capability difference. → **Bottleneck = STRATEGY, not model capability.** A stronger model alone
+  won't close the gap; the process must decompose (Phase 1). Re-test model choice AFTER Phase 1.
+- **Consequence:** D₀'s cheap-model substrate is validated (claude ≈ minimax under current
+  strategy) → **Phase 1 can be built + iterated on minimax** (no claude rate-limit), claude
+  reserved for a post-Phase-1 recall re-test.
+- **P0b:** E₀ held-out set + `FORGE_E0` harness built (`docs/E0_heldout.md`); full E₀ recall run
+  pending claude quota reset.
+
 ## Council trail
 - v1 → **replan**: merge A+B (fan-out is crippled without cross-file retrieval); pull E and D
   forward as minimal slices (can't gate on a missing benchmark; per-concern reviewers serialize
