@@ -131,7 +131,7 @@ def _enumerate(cfg, model, token, diff, changed_files, goal) -> list[dict]:
             f"{', '.join(changed_files)}\n\nUnified diff:\n{AGENT._balanced_diff(diff, 40000)}")
     # Headroom matters: minimax emits a long <think> before the JSON; 2000 tokens got eaten
     # by the reasoning and the JSON never arrived (0 concerns → blob fallback → 0 findings).
-    text, _ = llm.complete(model, token, CONCERN_SYSTEM, user, max_tokens=6000)
+    text, _ = llm.complete(model, token, CONCERN_SYSTEM, user, max_tokens=16000)
     obj = _extract_json(text or "") or {}
     concerns = obj.get("concerns")
     if isinstance(concerns, list) and concerns:
@@ -227,7 +227,7 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
         user = (f"PR in `{repo_name}`. Concern: {f.get('concern','')}\n"
                 f"CANDIDATE: {json.dumps({k: f.get(k) for k in ('severity','file','line','detail')}, ensure_ascii=False)[:1000]}\n\n"
                 f"Diff:\n{AGENT._balanced_diff(diff, 12000)}")
-        vt, _ = llm.complete(model, token, REFUTE_SYSTEM, user, max_tokens=2400)
+        vt, _ = llm.complete(model, token, REFUTE_SYSTEM, user, max_tokens=8000)
         v = _extract_json(vt or "") or {}
         if str(v.get("verdict", "")).lower() in ("confirmed", "plausible"):
             f["confidence"] = int(v.get("confidence", 70) or 70)

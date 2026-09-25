@@ -217,7 +217,7 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
         read_paths: set[str] = set()
         pushbacks = 0
         for step in range(max_steps):
-            text, meta = llm.complete(model, token, sys_prompt, convo, max_tokens=8000)
+            text, meta = llm.complete(model, token, sys_prompt, convo, max_tokens=32000)
             if text is None:
                 return {"error": meta.get("error", "model call failed")}
             call = _extract_json(text) or {}
@@ -261,7 +261,7 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
         text, _ = llm.complete(model, token,
                                sys_prompt + "\n\nYou are out of investigation steps. Emit your "
                                "done verdict JSON NOW based on what you have seen.",
-                               convo, max_tokens=1600)
+                               convo, max_tokens=32000)
         j = _extract_json(text or "") or {}
         return {"findings": j.get("findings", []), "summary": j.get("summary", ""),
                 "verdict": j.get("verdict") or (

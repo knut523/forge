@@ -88,7 +88,7 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
                 f"Unified diff:\n{_clip(diff, 18000)}\n\n"
                 "Investigate the code with your tools if needed, then refute or confirm.")
         # a tiny tool-enabled verify: one read/grep is usually enough to check a claim
-        vtext, _ = llm.complete(model, token, REFUTE_SYSTEM, user, max_tokens=700)
+        vtext, _ = llm.complete(model, token, REFUTE_SYSTEM, user, max_tokens=8000)
         v = _extract_json(vtext or "") or {}
         verdict = str(v.get("verdict", "")).lower()
         if verdict in ("confirmed", "plausible"):

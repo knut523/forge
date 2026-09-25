@@ -80,7 +80,7 @@ def deliberate(cfg: ConfigStore, title: str, body: str, *, models: list[str] | N
     for m in panel:
         ev("council", "info", f"{m['name']} deliberating…")
         text, meta = llm.complete(m, _tok(cfg, m), COUNCILLOR_SYSTEM,
-                                  f"{title}\n\n{body}", max_tokens=2400)
+                                  f"{title}\n\n{body}", max_tokens=8000)
         op = _extract_json(text or "") or {}
         if op:
             op["_member"] = m["name"]
@@ -97,7 +97,7 @@ def deliberate(cfg: ConfigStore, title: str, body: str, *, models: list[str] | N
     ev("council", "info", f"{chair_m['name']} (chair) synthesising {len(opinions)} opinion(s)")
     ctext, _ = llm.complete(chair_m, _tok(cfg, chair_m), CHAIR_SYSTEM,
                             f"{title}\n\nITEM:\n{body[:6000]}\n\nMEMBER OPINIONS:\n{packed}",
-                            max_tokens=2400)
+                            max_tokens=8000)
     con = _extract_json(ctext or "") or {}
     verdict = str(con.get("verdict", "")).lower()
     if verdict not in ("pass", "concerns", "fail"):
