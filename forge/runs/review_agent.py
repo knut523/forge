@@ -217,7 +217,7 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
         read_paths: set[str] = set()
         pushbacks = 0
         for step in range(max_steps):
-            text, meta = llm.complete(model, token, sys_prompt, convo, max_tokens=1600)
+            text, meta = llm.complete(model, token, sys_prompt, convo, max_tokens=2800)
             if text is None:
                 return {"error": meta.get("error", "model call failed")}
             call = _extract_json(text) or {}

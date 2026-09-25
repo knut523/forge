@@ -120,6 +120,37 @@ before rework. Phase 1 is the core intervention (targets parity). Phase 2 target
 - **P0b:** E₀ held-out set + `FORGE_E0` harness built (`docs/E0_heldout.md`); full E₀ recall run
   pending claude quota reset.
 
+## PRIOR ART — don't rebuild what's already built well (Knut's steer, 2026-09-25)
+The parity capabilities are largely solved problems in mature OSS. Verified by research:
+- **Qodo PR-Agent** (Apache-2, open source, model-configurable): specialized multi-agent review
+  (bug / logic-gap / missing-test / security / risk = our "concern decomposition"), cross-file +
+  dependency retrieval, AND **indexes past PR diffs/comments/discussions to filter findings**
+  (= our P2 Christoph-corpus learning loop). Plus diff compression + a /review /improve command UI.
+  → P1 *and* P2 are largely already built here.
+- **Aider repo-map** (MIT; ports: RepoMapper (py), goldfish (go)): tree-sitter symbol graph →
+  **personalized PageRank** (chat/PR symbols biased ×10–50) → token-budgeted render of the most
+  central signatures. This is the *right* way to do P1's cross-file retrieval — and **forge already
+  has the symbol graph** (symbols/refs/callers in its index); it only lacks the PageRank ranking +
+  budgeted render. Small, high-value port.
+- **Greptile** (codebase-graph PR review) + **CodeRabbit** ("learnings" from past review comments):
+  commercial, but they validate the graph-retrieval and learn-from-past-comments theses.
+
+### P1 hand-rolled experiment result (the evidence for pivoting)
+Concern decomposition on #181 produced **8 excellent, Christoph-grade concerns** — but each
+per-concern minimax reviewer confirmed **~0 findings**. Decomposition (the strategy) works; the
+per-concern *reviewer execution* (turning a concern into an articulated defect) is the hard part —
+exactly what PR-Agent's specialized agents already do. Hand-rolling it further = reinventing PR-Agent.
+
+### Revised approach (measurement-first, same discipline as P0)
+1. **Adopt Aider's repo-map** ranking over forge's EXISTING index (personalized PageRank + budgeted
+   render) — small port, replaces the ad-hoc `_crossfile_map`. Proven, cheap, forge has the graph.
+2. **Measurement spike on PR-Agent** BEFORE integrate-vs-port: install PR-Agent, point it at #181 +
+   E₀ with our models, measure its recall vs Christoph. "Others built it well" is a hypothesis to
+   *verify on our repos* (the vendor-claims-until-reproduced lesson), not assume.
+3. **Then the council decides integrate-vs-port-vs-native** with real numbers: if PR-Agent
+   materially out-recalls forge on E₀ → integrate it (it's model-agnostic, fits forge) or port its
+   specialized-agent + past-comment patterns; if not, the gap is deeper and we learned it cheaply.
+
 ## Council trail
 - v1 → **replan**: merge A+B (fan-out is crippled without cross-file retrieval); pull E and D
   forward as minimal slices (can't gate on a missing benchmark; per-concern reviewers serialize
