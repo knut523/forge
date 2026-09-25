@@ -1,3 +1,25 @@
+## P1 RESULT (2026-09-25, after the truncation fix) — parity path PROVEN, forge-native
+- **claude + forge's concern-decomposition on #181: 12 confirmed findings** (2 medium, 10 low),
+  changes-requested-class — up from claude-blob's 1. The decomposition harness on the model we
+  already have lifted recall ~12×. **This is the parity path, and it is forge's own module on
+  claude-session — nothing thrown away, no new tools.**
+- **Scored vs Christoph's indexed ground truth: forge caught his 1 non-stale blocking finding
+  (the batch-insert-fails / per-row-fallback data-loss bug) → 100% recall on the measurable set.**
+  (The earlier "14 findings" was a judge over-count; the index holds 1 inline blocker + a
+  truncated review body referencing "four blockers".) forge also raised 11 additional real
+  deep-infra defects (constant-time length leak, dedupe second-granularity collisions,
+  recipient write/read normalization asymmetry, PII in console.error, empty-404 distinguishability).
+- **minimax + decomposition (uncapped): 2 confirmed** (both high, both real: proxy-regex hardcode
+  + no per-person erasure path for the JSONB PII). minimax is a CONSERVATIVE breadth reviewer —
+  good cheap concern enumeration, finds the 1-2 clearest defects, misses the long tail.
+- **The two bugs Knut caught made this measurable:** (1) minimax findings were being TRUNCATED at
+  2800 tok/turn (huge .ndimax .ndimax blocks) and discarded — fixed, uncapped; (2) max_tokens is a
+  ceiling not a target — uncapped the whole review path. P0's "strategy not model" was contaminated
+  by the truncation; corrected read: the lever is STRATEGY (decomposition) + a CAPABLE model (claude).
+- **Parity recipe (evidence-based):** claude does the finding (decomposed), minimax does the cheap
+  concern-enumeration. Ensemble, forge-native. Next: validate on the E0 held-out set + re-run the
+  council's disconfirming test (does forge-claude recover what Claude finds conversationally?).
+
 # forge → parity → superiority with Christoph (plan v2, council-revised)
 
 ## The goal (verbatim, not downgraded)
