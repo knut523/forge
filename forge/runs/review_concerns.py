@@ -27,7 +27,44 @@ from ..config import llm
 from ..indexer import query as Q
 from . import review_agent as AGENT
 from . import review_exec as REx
+from . import review_sast as SAST
+from . import repomap as RepoMap
 from .engine import _extract_json
+
+# Fixed concern taxonomy (steal: PR-Agent's always-checked dimensions + OWASP + Google
+# eng-practices). These ALWAYS run so coverage never depends on the model remembering a
+# category. `blocking` types ratchet the verdict; advisory ones do not (council: don't block
+# on style). The model-enumerated PR-specific concerns are added on top.
+FIXED_TAXONOMY = [
+    {"key": "security", "blocking": True,
+     "title": "Security & input validation — injection, auth bypass, unsafe deserialization, "
+              "SSRF, secrets, unsafe eval/exec, path traversal"},
+    {"key": "data_integrity", "blocking": True,
+     "title": "Data integrity & migration safety — destructive/irreversible ops, wrong rows "
+              "affected, migration unsafe across the rollout window, lost writes"},
+    {"key": "cross_file", "blocking": True,
+     "title": "Cross-file invariants — a value written in one place and read in another under "
+              "a mismatched assumption (normalization, encoding, timezone, units)"},
+    {"key": "idempotency", "blocking": True,
+     "title": "Idempotency & side-effects — retries/duplicates, non-idempotent writes, ordering "
+              "and concurrency races, dedupe-key stability"},
+    {"key": "pii", "blocking": True,
+     "title": "PII & logging — personal data written to logs/telemetry, over-broad storage, "
+              "no per-person erasure path"},
+    {"key": "access_control", "blocking": True,
+     "title": "Access control & authz — a new route/endpoint missing its gate, privilege or "
+              "tenant-isolation checks, IDOR"},
+    {"key": "errors", "blocking": False,
+     "title": "Error & empty-state handling — swallowed errors, unhandled null/empty, wrong "
+              "status codes, partial-failure fallbacks that lose data"},
+    {"key": "tests", "blocking": False,
+     "title": "Tests — is the changed behaviour covered by a test that actually runs in CI"},
+    {"key": "performance", "blocking": False,
+     "title": "Performance — N+1, sequential scans, blocking work on a hot path"},
+    {"key": "maintainability", "blocking": False,
+     "title": "Maintainability — dead code, duplication, mysterious naming, needless complexity"},
+]
+_BLOCKING_KEYS = {t["key"] for t in FIXED_TAXONOMY if t["blocking"]}
 
 CONCERN_SYSTEM = (
     "You are triaging a pull request into distinct review CONCERNS so each can be reviewed "
@@ -160,22 +197,60 @@ def _dedup(findings: list[dict]) -> list[dict]:
     return out
 
 
+def _build_concerns(cfg, breadth_model, breadth_tok, diff, changed_files, goal, ev,
+                    max_enumerated=5):
+    """Fixed taxonomy (guaranteed coverage, model-INDEPENDENT) + model-enumerated PR-specific
+    concerns (capped — the council's hard call-cap so the bridge doesn't bottleneck)."""
+    enumerated = _enumerate(cfg, breadth_model, breadth_tok, diff, changed_files, goal)[:max_enumerated]
+    concerns = []
+    for t in FIXED_TAXONOMY:
+        concerns.append({"key": t["key"], "title": t["title"], "blocking": t["blocking"],
+                         "files": changed_files, "why": "fixed-taxonomy coverage", "fixed": True})
+    for c in enumerated:
+        c.setdefault("key", "enumerated"); c.setdefault("blocking", True)  # PR-specific = treat as blocking
+        c["fixed"] = False
+        concerns.append(c)
+    ev("concerns", "info", f"{len(FIXED_TAXONOMY)} taxonomy + {len(enumerated)} enumerated "
+       f"= {len(concerns)} concern(s)")
+    return concerns
+
+
+def _seed_findings(repo_name, diff, changed_files, ev):
+    """Deterministic seeds (semgrep) folded in as guaranteed findings — a known pattern the
+    LLM misses is still caught by the scanner."""
+    try:
+        s = SAST.scan(repo_name, diff, changed_files)
+    except Exception:
+        return []
+    seeds = s.get("seeds") or []
+    out = []
+    for sd in seeds:
+        out.append({"severity": sd.get("severity", "medium"), "file": sd.get("file", ""),
+                    "line": sd.get("line", 0), "detail": f"[semgrep] {sd.get('detail', sd)}",
+                    "concern": "security", "key": "security", "blocking": True,
+                    "confidence": 90, "seed": True})
+    if out:
+        ev("seeds", "info", f"{len(out)} deterministic seed finding(s) folded in")
+    return out
+
+
 def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
            changed_files: list[str], goal: str = "", grounding: str = "",
            prepared: dict | None = None, store=None, on_event=None,
-           max_concurrency: int = 5) -> dict:
-    """Concern-decomposed review. Returns {findings, verdict, summary, concerns, steps}."""
+           max_concurrency: int = 5, breadth_model: dict | None = None,
+           use_repomap: bool = True) -> dict:
+    """Scaled concern-decomposed review. `model` = the DEPTH reviewer (finds defects, e.g.
+    claude); `breadth_model` = the cheap reviewer for advisory concerns + enumeration (e.g.
+    minimax) — the council's cost-guard so the fixed taxonomy doesn't bottleneck the bridge.
+    Fixed taxonomy guarantees coverage; deterministic seeds + coverage-tracking + severity-aware
+    merge complete it. Returns {findings, verdict, summary, concerns, coverage}."""
     ev = on_event or (lambda *a, **k: None)
-    # 1. enumerate concerns
-    ev("concerns", "info", "enumerating the PR's concerns")
-    concerns = _enumerate(cfg, model, token, diff, changed_files, goal)
-    if not concerns:
-        ev("concerns", "info", "no concerns enumerated — falling back to a single pass")
-        concerns = [{"title": "whole PR", "files": changed_files, "why": "general review"}]
-    ev("concerns", "info", f"{len(concerns)} concern(s): "
-       + "; ".join(str(c.get("title", ""))[:50] for c in concerns))
+    depth_tok = token
+    bm = breadth_model or model
+    btok = _tok(cfg, bm) if breadth_model else token
 
-    # need a prepared clone for the per-concern reviewers to share (read-only)
+    concerns = _build_concerns(cfg, bm, btok, diff, changed_files, goal, ev)
+
     own = False
     if not (prepared and prepared.get("dir")):
         prep = REx._prepare(repo_name, diff)
@@ -184,14 +259,26 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
         prepared, own = prep, True
     root = prepared["dir"]
 
+    # Graph-ranked cross-file context (Aider repo-map over forge's index), computed once.
+    xctx = ""
+    if use_repomap and store is not None:
+        try:
+            xctx = RepoMap.rank_context(store, repo_name, changed_files, diff)
+        except Exception:
+            xctx = ""
+
     def _one(c: dict) -> list[dict]:
-        xmap = _crossfile_map(store, repo_name, c, diff)
+        # cost guard: blocking/enumerated concerns get the DEPTH model; advisory get breadth.
+        use_model, use_tok = ((model, depth_tok) if c.get("blocking")
+                              else (bm, btok))
+        xmap = xctx or _crossfile_map(store, repo_name, c, diff)
         cg = (f"THE CONCERN: {c.get('title')}\nWHY IT'S RISKY: {c.get('why')}\n"
               f"FILES: {', '.join(c.get('files') or [])}\n\n"
               + (xmap + "\n\n" if xmap else "")
               + (grounding[:4000] if grounding else ""))
         try:
-            r = AGENT.review(cfg, model, token, repo_name, diff, c.get("files") or changed_files,
+            r = AGENT.review(cfg, use_model, use_tok, repo_name, diff,
+                             c.get("files") or changed_files,
                              goal=f"CONCERN: {c.get('title')}", grounding=cg,
                              prepared={"dir": root, "scratch": None}, max_steps=12,
                              system_override=_concern_brief(
@@ -199,43 +286,66 @@ def review(cfg, model: dict, token: str | None, repo_name: str, diff: str,
             fs = r.get("findings", []) or []
             for f in fs:
                 f["concern"] = c.get("title")
+                f["concern_key"] = c.get("key")
+                f["blocking_concern"] = bool(c.get("blocking"))
             return fs
         except Exception as e:
-            ev("concerns", "info", f"concern '{str(c.get('title'))[:40]}' errored: {type(e).__name__}")
+            ev("concerns", "info", f"concern '{str(c.get('key'))}' errored: {type(e).__name__}")
             return []
 
-    # 2+3. per-concern focused reviewers, in parallel
-    all_findings: list[dict] = []
+    all_findings: list[dict] = list(_seed_findings(repo_name, diff, changed_files, ev))
+    reviewed_files: set = set()
     try:
         with ThreadPoolExecutor(max_workers=max_concurrency) as ex:
             futs = {ex.submit(_one, c): c for c in concerns}
             for fut in as_completed(futs):
                 got = fut.result() or []
                 c = futs[fut]
-                ev("concerns", "info", f"concern '{str(c.get('title'))[:40]}' → {len(got)} finding(s)")
+                for f in (c.get("files") or changed_files):
+                    reviewed_files.add(f)
+                ev("concerns", "info", f"[{c.get('key')}] → {len(got)} finding(s)")
                 all_findings += got
     finally:
         if own and prepared.get("scratch"):
             import shutil
             shutil.rmtree(prepared["scratch"], ignore_errors=True)
 
-    # 4. dedup + recall-biased refute
+    # coverage: every changed file should have been in some concern's scope
+    uncovered = [f for f in changed_files if f not in reviewed_files]
+    coverage = {"changed": len(changed_files), "reviewed": len(reviewed_files & set(changed_files)),
+                "uncovered": uncovered}
+    if uncovered:
+        ev("coverage", "warn", f"{len(uncovered)} changed file(s) not covered by any concern")
+
+    # dedup + recall-biased refute (seeds are pre-confirmed, skip refute for them)
     cand = _dedup(all_findings)
-    ev("refute", "info", f"{len(all_findings)} raw → {len(cand)} deduped; verifying")
-    confirmed = []
-    for f in cand[:24]:
+    to_verify = [f for f in cand if not f.get("seed")]
+    ev("refute", "info", f"{len(all_findings)} raw → {len(cand)} deduped; verifying {len(to_verify)}")
+    confirmed = [f for f in cand if f.get("seed")]
+    for f in to_verify[:30]:
         user = (f"PR in `{repo_name}`. Concern: {f.get('concern','')}\n"
                 f"CANDIDATE: {json.dumps({k: f.get(k) for k in ('severity','file','line','detail')}, ensure_ascii=False)[:1000]}\n\n"
                 f"Diff:\n{AGENT._balanced_diff(diff, 12000)}")
-        vt, _ = llm.complete(model, token, REFUTE_SYSTEM, user, max_tokens=8000)
+        vt, _ = llm.complete(model, depth_tok, REFUTE_SYSTEM, user, max_tokens=8000)
         v = _extract_json(vt or "") or {}
         if str(v.get("verdict", "")).lower() in ("confirmed", "plausible"):
             f["confidence"] = int(v.get("confidence", 70) or 70)
             confirmed.append(f)
+
     sev = {"high": 0, "medium": 1, "low": 2}
     confirmed.sort(key=lambda f: sev.get(str(f.get("severity", "low")).lower(), 3))
-    verdict = ("changes-requested" if any(f.get("severity") == "high" for f in confirmed)
-               else "pass-with-concerns" if confirmed else "pass")
+    # severity-aware merge (council): block only on findings from BLOCKING concern-types;
+    # advisory-concern findings (maintainability/style/perf/tests) never ratchet to block.
+    blocking_hits = [f for f in confirmed if f.get("blocking_concern")
+                     and str(f.get("severity", "")).lower() in ("high", "medium")]
+    if blocking_hits:
+        verdict = "changes-requested"
+    elif confirmed:
+        verdict = "pass-with-concerns"
+    else:
+        verdict = "pass"
     return {"findings": confirmed, "verdict": verdict,
-            "summary": f"{len(concerns)} concerns → {len(confirmed)} confirmed finding(s)",
-            "concerns": [c.get("title") for c in concerns], "model": model.get("name")}
+            "summary": (f"{len(concerns)} concerns ({len(FIXED_TAXONOMY)} taxonomy) → "
+                        f"{len(confirmed)} confirmed ({len(blocking_hits)} blocking)"),
+            "concerns": [c.get("key") for c in concerns], "coverage": coverage,
+            "model": model.get("name")}
