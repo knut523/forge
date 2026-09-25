@@ -160,3 +160,9 @@ exactly what PR-Agent's specialized agents already do. Hand-rolling it further =
   diagnostic gate, NOT bundled with P1. P1's model-agnostic scaffolding may proceed in parallel;
   D₀'s parallel-cheap-model substrate design waits for P0a's model-swap result. Folded in above.
   Plan is council-approved. First action: **P0** (model-swap test + E₀ benchmark).
+- v3 (build-vs-integrate, after the prior-art pivot) → **PASS** (0.78), refined: apply
+  measurement-first to BOTH candidates. **Spike PR-Agent ALONE first** on #181 + E₀ (verify recall
+  vs Christoph, that it can emit forge's concern taxonomy, and that it respects the rate-limited
+  multi-provider runtime). The **Aider repo-map port is CONTINGENT** — only adopt it if the spike
+  shows cross-file *retrieval* is the constraint (P0 says the bottleneck is strategy, not retrieval;
+  and PR-Agent brings its own retrieval, so the port may be redundant). Next action: **PR-Agent spike**.
