@@ -282,13 +282,25 @@ def _draft(owner: str, repo: str, number: int, review: dict, meta: dict,
         lines += ["No blocking issues found.", ""]
     if review.get("verdict"):
         lines += [f"**Verdict:** {review['verdict']}", ""]
-    how = (f"full check — {len(meta.get('finders', []))} finder model(s) "
-           f"({', '.join(meta.get('finders', []))}) + adversarial verify"
-           if meta.get("mode") == "full"
-           else f"light check — {', '.join(meta.get('finders', []))}")
+    finders = ", ".join(meta.get("finders", []))
+    mode = meta.get("mode")
+    if mode == "adversarial":
+        how = f"adversarial check — {finders} (BREAK then refute), {meta.get('steps', '?')} steps"
+    elif mode == "agentic":
+        how = f"agentic check — {finders}, {meta.get('steps', '?')} tool steps"
+    elif mode == "full":
+        how = f"full check — {len(meta.get('finders', []))} finder model(s) ({finders}) + adversarial verify"
+    else:
+        how = f"light check — {finders}"
     considered = (f", considered {n_comments} prior comment(s)" if n_comments else "")
-    lines.append(f"<sub>Drafted by forge · {how}{considered}. Verify before relying "
-                 f"on it.</sub>")
+    # Self-calibration caveat (council condition, 2026-09-25): forge measures as a strong
+    # first-pass on mechanical/structural PRs (~2/3 recall) but weak on deep infra PRs
+    # (~1/14 vs a top human reviewer). Say so in the output so nobody over-trusts a pass.
+    lines.append(f"<sub>Drafted by forge · {how}{considered}. **Not a substitute for a "
+                 f"human reviewer on deep/infra changes** — forge reliably catches "
+                 f"structural, acceptance, and wiring defects but still misses domain-specific "
+                 f"and cross-cutting bugs a senior reviewer would catch. Verify before "
+                 f"relying on it; keep the human gate on complex changes.</sub>")
     return "\n".join(lines)
 
 

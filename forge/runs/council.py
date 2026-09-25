@@ -69,6 +69,11 @@ def deliberate(cfg: ConfigStore, title: str, body: str, *, models: list[str] | N
     opinions}. `models` restricts the panel; `chair` names the synthesiser (else strongest)."""
     ev = on_event or (lambda *a, **k: None)
     panel = _panel(cfg, models)
+    # Quorum safety (council condition 2026-09-25): the chair is always panel[0] and we
+    # proceed with however many voices exist — there is NO fixed-quorum wait, so a missing
+    # panelist (e.g. glm not yet configured) can never deadlock. 0 models / 0 parseable
+    # opinions degrade to a clean 'fail' return, and the pipeline callers wrap this in
+    # try/except (best-effort), so the council can never block a build.
     if not panel:
         return {"verdict": "fail", "must_fix": ["no models registered"], "opinions": []}
     opinions = []
