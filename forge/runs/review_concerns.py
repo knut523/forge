@@ -66,6 +66,11 @@ FIXED_TAXONOMY = [
 ]
 _BLOCKING_KEYS = {t["key"] for t in FIXED_TAXONOMY if t["blocking"]}
 
+
+def _tok(cfg, m):
+    from .pr_review import _tok as t
+    return t(cfg, m)
+
 CONCERN_SYSTEM = (
     "You are triaging a pull request into distinct review CONCERNS so each can be reviewed "
     "in depth separately. From the diff and changed files, list the specific risk areas a "
